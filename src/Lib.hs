@@ -455,11 +455,11 @@ sameTypes _ [] = False
 sameTypes c (x:xs) = sameType c x || sameTypes c xs
 
 merge :: [Constraint] -> Constraint
-merge c@((SizeConstraint {}):_) = foldr (\(SizeConstraint _ x y z ci) (SizeConstraint _ x' y' z' ci') -> SizeConstraint 0 (max x x') (max y y') (max z z') (\x' y' z' -> x' >= 0 && y' >= 0 && z' >= 0))
-                    (SizeConstraint 0 0 0 0 (\x'' y'' z'' -> x'' >= 0 && y'' >= 0 && z'' >= 0)) c
+merge c@((SizeConstraint {}):_) = foldr (\(SizeConstraint _ x y z ci) (SizeConstraint _ x' y' z' ci') -> SizeConstraint 0 (max x x') (max y y') (max z z') (\x''' y''' z''' -> x''' <= max x x' && y''' <= max y y' && z''' <= max z z'))
+                    (SizeConstraint 0 0 0 0 (\x'' y'' z'' -> x'' <= 0 && y'' <= 0 && z'' <= 0)) c
 merge c@((CapacityConstraint {}):_) = foldr (\(CapacityConstraint _ s c ci) (CapacityConstraint _ s' c' ci') -> CapacityConstraint 0 (s + s') (c + c') (<= (c + c')))
                     (CapacityConstraint 0 0 0 (<= 0)) c
-merge c@((MaterialConstraint {}):_)  = foldr (\(MaterialConstraint _ ms mi) (MaterialConstraint _ ms' mi') -> MaterialConstraint 0 (union ms ms') (`elem` (union ms ms')))
+merge c@((MaterialConstraint {}):_)  = foldr (\(MaterialConstraint _ ms mi) (MaterialConstraint _ ms' mi') -> MaterialConstraint 0 (ms `union` ms') (`elem` union ms ms'))
                     (MaterialConstraint 0 [] (`elem` [])) c
 merge [] = error "Cannot merge empty list"
 
