@@ -170,7 +170,7 @@ testTree3 = Node "Root" 0 [] 1 1
                 ]
 
 traverseTree :: InventoryTree -> Item -> [Optimization] -> IO Result
-traverseTree tree@(Node j ord c g b n) i o = let eval@(EvaluationResult res trys) = trace ("evaluateConstraints in traverseTree: " ++ j ++ show (evaluateConstraints tree i o c)) $ evaluateConstraints tree i o c in
+traverseTree tree@(Node j ord c g b n) i o = let eval@(EvaluationResult res trys) = evaluateConstraints tree i o c in
                                     if res
                                     then
                                         do on         <- applyValueOrdering n o
@@ -202,11 +202,11 @@ traverseTree tree@(Node j ord c g b n) i o = let eval@(EvaluationResult res trys
                                                 True
                                                 Nothing
                                                 (sum (map (\(Result _ _ _ o') -> o') results) + trys)
-                                    else return $ Result (Node j ord (trace ("!!!reorder!!!" ++ j ++ show c ++ show eval ++ show (reOrderConstraints o c eval)) $ reOrderConstraints o c eval) g b n) False Nothing trys
+                                    else return $ Result (Node j ord (reOrderConstraints o c eval) g b n) False Nothing trys
 traverseTree tree@(Leaf j ord c g b is) i o = let eval@(EvaluationResult res trys) = evaluateConstraints tree i o c in
                                     if res
                                     then return $ Result (Leaf j ord c g b (i:is)) True (Just [ord]) trys
-                                    else return $ Result (Leaf j ord (trace ("!!!reorder!!!" ++ j ++ show c ++ show eval ++ show (reOrderConstraints o c eval)) $ reOrderConstraints o c eval) g b is) False Nothing   trys
+                                    else return $ Result (Leaf j ord (reOrderConstraints o c eval) g b is) False Nothing trys
 
 getAllUntilSuccess :: [Result] -> [Result]
 getAllUntilSuccess (res@(Result _ _ Nothing _):xs) = res : getAllUntilSuccess xs
@@ -344,35 +344,38 @@ run' :: Int -> InventoryTree -> [Optimization] -> Int -> Int -> IO FinalResult
 run' 1 tree o _ _  = do
                     randomItem <- getRandomItem
                     Result tree' _ pos score <- traverseTree tree randomItem o
-                    treeRem' <- removeRandomItem tree'
+                    treeRem' <- removeRandomItem pos tree'
                     return $ case pos of
                         Just p  -> FinalResult treeRem' [p] [score]
                         Nothing -> FinalResult tree'  []  []
 run' n tree o i 0  = do
                     randomItem <- getRandomItem
-                    Result tree' _ pos score <- traverseTree (trace ("constraint propagation: " ++ show tree ++ "    /    " ++ show (applyConstraintPropagation tree o)) $ applyConstraintPropagation tree o) randomItem o
-                    treeRem' <- removeRandomItem tree'
-                    FinalResult tree'' ps score' <- run' (pred n) treeRem' o i i
+                    Result tree' _ pos score <- traverseTree (applyConstraintPropagation tree o) randomItem o
+                    treeRem' <- removeRandomItem pos tree'
+                    FinalResult tree'' ps score' <- run' (if pos == Nothing then n else pred n) treeRem' o i i
                     return $ case pos of
-                        Just p  -> FinalResult tree'' (p:ps) (score : score')
+                        Just (_:p)  -> FinalResult tree'' (p:ps) (score : score')
+                        Just [] -> error "Not possible"
                         Nothing -> FinalResult tree'' ps     score'
 run' n tree o i ci = do
                     randomItem <- getRandomItem
                     Result tree' _ pos score <- traverseTree tree randomItem o
-                    treeRem' <- removeRandomItem tree'
-                    FinalResult tree'' ps score' <- run' (pred n) treeRem' o i (pred ci)
+                    treeRem' <- removeRandomItem pos tree'
+                    FinalResult tree'' ps score' <- run' (if pos == Nothing then n else pred n) treeRem' o i (pred ci)
                     return $ case pos of
-                        Just p  -> FinalResult tree'' (p:ps) (score : score')
+                        Just (_:p)  -> FinalResult tree'' (p:ps) (score : score')
+                        Just [] -> error "Not possible"
                         Nothing -> FinalResult tree'' ps     score'
 
-removeRandomItem :: InventoryTree -> IO InventoryTree
-removeRandomItem t = removeRandomItem' (getItemCount t) t
+removeRandomItem :: Maybe TreePosition -> InventoryTree -> IO InventoryTree
+removeRandomItem Nothing t = return t
+removeRandomItem _       t = removeRandomItem' (getItemCount t) t
 removeRandomItem' :: Int -> InventoryTree -> IO InventoryTree
 removeRandomItem' _ t@(Leaf _ _ _ _ _ []) = return t
 removeRandomItem' x (Leaf a b c d e (i:is)) = do
-            num <- randomRIO (1, x)
+            num <- randomRIO (0, x)
             (Leaf a' b' c' d' e' is') <- removeRandomItem' x (Leaf a b c d e is)
-            return $ if num == 1 then Leaf a b c d e is else Leaf a' b' c' d' e' (i:is')
+            return $ if num == 0 then Leaf a' b' c' d' e' is' else Leaf a' b' c' d' e' (i:is')
 removeRandomItem' x (Node name order constraints width height children) = do
     updatedChildren <- mapM (removeRandomItem' x) children
     return $ Node name order constraints width height updatedChildren
@@ -402,9 +405,7 @@ applyConstraintPropagation t o
 
 applyConstraintPropagation' :: InventoryTree -> InventoryTree
 applyConstraintPropagation' tree@(Leaf {})  = tree
-applyConstraintPropagation' (Node j x c y z n)  = let (curr, under) = reassemble n $ pushDown $ pushUp $ trace ("before pushUp" ++ show ([] :: [Constraint], c, map (\case
-                                                        (Node _ _ c' _ _ _) -> c'
-                                                        (Leaf _ _ c' _ _ _) -> c') n)) ([], c, map (\case
+applyConstraintPropagation' (Node j x c y z n)  = let (curr, under) = reassemble n $ pushDown $ pushUp ([], c, map (\case
                                                         (Node _ _ c' _ _ _) -> c'
                                                         (Leaf _ _ c' _ _ _) -> c') n) in
                                                         Node j x curr y z (map applyConstraintPropagation' under)
@@ -413,7 +414,7 @@ filterConstraints :: [[Constraint]] -> [[Constraint]]
 filterConstraints [] = []
 filterConstraints constraintsLists =
   let commonConstraints = foldr1 (intersectBy sameType) constraintsLists
-  in trace ("after filterConstraints" ++ show (map (filter (`sameTypes` commonConstraints)) constraintsLists)) $ map (filter (`sameTypes` commonConstraints)) constraintsLists
+  in map (filter (`sameTypes` commonConstraints)) constraintsLists
 
 filterFirstHalf :: [Constraint] -> [Constraint]
 filterFirstHalf [] = []
@@ -474,12 +475,12 @@ compareConstraints _ _ = EQ
 
 pushUp :: ([Constraint],[Constraint],[[Constraint]]) -> ([Constraint],[Constraint],[[Constraint]])
 pushUp (nc, up, down) = let propConstraints = map (removeFrom nc) $ filterConstraints $ map filterFirstHalf down
-                            mergedConstraints = map merge $ trace ("before groupConstraints: " ++ show propConstraints ++ " after groupConstraints: " ++ show (groupConstraints propConstraints)) $ groupConstraints propConstraints in
-                                trace ("after pushUp: " ++ show (mergedConstraints,map merge (groupConstraints [mergedConstraints, up]),down)) (mergedConstraints,map merge (groupConstraints [mergedConstraints, up]),down)
+                            mergedConstraints = map merge $ groupConstraints propConstraints in
+                                (mergedConstraints,map merge (groupConstraints [mergedConstraints, up]),down)
 
 pushDown :: ([Constraint],[Constraint],[[Constraint]]) -> ([Constraint],[Constraint],[[Constraint]])
 pushDown pl@(nc, up, down) = let propConstraints = filterWasPushedUp pl $ filterNotContainsDown down $ removeFrom nc $ filterSecondHalf up in
-                            trace ("after pushDown: " ++ show (propConstraints,removeFrom propConstraints up,down)) (propConstraints,removeFrom propConstraints up,down)
+                            (propConstraints,removeFrom propConstraints up,down)
 
 reassemble :: [InventoryTree] -> ([Constraint],[Constraint],[[Constraint]]) -> ([Constraint],[InventoryTree])
 reassemble t (_,y,z) = (y,zipWith (curry (\case
