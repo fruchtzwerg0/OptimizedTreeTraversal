@@ -26,6 +26,8 @@ source-repository head
 library
   exposed-modules:
       Lib
+      Second
+      Tree
   other-modules:
       Paths_treetraversalsample
   autogen-modules:

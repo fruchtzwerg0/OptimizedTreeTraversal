@@ -1,6 +1,8 @@
 module Main (main) where
 
 import Lib
+import Second
+import Tree
 import System.Environment
 
 main :: IO ()
