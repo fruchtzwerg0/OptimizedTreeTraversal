@@ -3,9 +3,8 @@ module Second where
 
 import Tree
 import Data.List
-import Foreign (toBool, Bits (xor))
 
-data Approach = RBDT | GiniManipulation
+data Approach = RBDT | GiniManipulation Int Int
 data EvaluationMode = Greedy | NonGreedy
 data DecisionTreeB = LeafB [LeafContent] | NodeB (Int -> Int -> Int -> Material -> Bool) DecisionTreeB DecisionTreeB
 data DecisionTreeNB = LeafNB [LeafContent] | NodeNB [Int -> Int -> Int -> Material -> Bool] [DecisionTreeNB]
@@ -16,7 +15,7 @@ instance Eq Rule where
     (==) :: Rule -> Rule -> Bool
     r0@(Rule x _) == r1@(Rule y _) = x == y && sameRuleSet (==) r0 r1
 
-data Input = Examples [Example] | Rules [Rule]
+data Input = Examples Int Int [Example] | Rules [Rule]
 
 data Result = Result DecisionTreeB Class
 type Class = [String]
@@ -32,8 +31,7 @@ predict :: InventoryTree -> EvaluationMode -> Example -> Input -> Result
 predict t e x i = (Result (buildTree i) . (makePredictions e x . addCapacity t . buildTree)) i
 
 buildTree :: Input -> DecisionTreeB
-buildTree (Examples ((Example l w t m c):xs)) = error "asdf"
-buildTree (Examples null) = error "asdf"
+buildTree (Examples minss maxd x) = buildBTree x minss maxd
 buildTree (Rules x) = (convertToBinaryTree . buildNBTree) x
 
 makePredictions :: EvaluationMode -> Example -> DecisionTreeB -> Class
@@ -71,6 +69,44 @@ putCapacity (LeafB xs) cc =
         getCurrentCapacity (CapacityConstraint _ c _ _) = c
         getCapacity :: Constraint -> Int
         getCapacity (CapacityConstraint _ _ c _) = c
+
+buildBTree :: [Example] -> Int -> Int -> DecisionTreeB
+buildBTree x minss maxd = let (l, r, _, f1, _, i) = getBestSplit x
+                          in if length x >= minss && maxd /= 0 && i > 0
+                             then NodeB f1 (buildBTree l minss maxd) (buildBTree r minss maxd)
+                             else (LeafB . nubBy (\(LeafContent y _ _) (LeafContent z _ _) -> y == z) . map (\(Example _ _ _ _ c) -> LeafContent c 0 0)) x
+
+getBestSplit :: [Example] -> ([Example], [Example], Example -> Int, Int -> Int -> Int -> Material -> Bool, Int, Double)
+getBestSplit x =
+    (foldr1 (\y@(_, _, _, _, _, yv) z@(_, _, _, _, _, zv) -> if yv >= zv then y else z) .
+    concatMap (getSplits x)) [(getLength, setLengthDecision), (getWidth, setWidthDecision), (getThickness, setThicknessDecision), (getMaterial, setMaterialDecision)]
+
+getSplits :: [Example] -> (Example -> Int, Int -> (Int -> Int -> Int -> Material -> Bool)) ->
+    [([Example], [Example], Example -> Int, Int -> Int -> Int -> Material -> Bool, Int, Double)]
+getSplits x (f0, f1) =
+    (filter (\(y0, y1, _, _, _, _) -> (not . null) y0 && (not . null) y1) .
+    map (\y -> (first y, second y, f0, f1 y, y, getInformationGain x (first y) (second y)))) ((nub . map f0) x)
+    where
+        first  = fst . splitBy x f0
+        second = snd . splitBy x f0
+
+splitBy :: [Example] -> (Example -> Int) -> Int -> ([Example], [Example])
+splitBy x f t = (filter (\y -> f y <= t) x, filter (\y -> f y > t) x)
+
+getInformationGain :: [Example] -> [Example] -> [Example] -> Double
+getInformationGain a l r = giniIndex a - (wl * giniIndex l + wr * giniIndex r)
+    where
+        wl = (fromIntegral . length) l / (fromIntegral . length) a
+        wr = (fromIntegral . length) r / (fromIntegral . length) a
+
+giniIndex :: [Example] -> Double
+giniIndex x = foldr (\y z -> cls y ** 2 + z) 0 (exampleClasses x)
+    where
+        cls :: Class -> Double
+        cls y = (fromIntegral . length . filter (\(Example _ _ _ _ c) -> c == y)) x / (fromIntegral . length) x
+
+exampleClasses :: [Example] -> [Class]
+exampleClasses = map (\(Example _ _ _ _ c) -> c) . nubBy eqC
 
 buildNBTree :: [Rule] -> DecisionTreeNB
 buildNBTree r = buildNBTree' r [attributeLength, attributeWidth, attributeThickness, attributeMaterial]
@@ -110,15 +146,15 @@ transformToInput :: InventoryTree -> Approach -> Input
 transformToInput t RBDT
     | (not . all fst . transformToRules) t = error "ruleset is infinite"
     | otherwise = (Rules . makeDisjoint) ((map snd . transformToRules) t)
-transformToInput t GiniManipulation
+transformToInput t (GiniManipulation minss maxd)
     | (not . all fst . transformToRules) t = error "ruleset is infinite"
-    | otherwise = (Examples . transformToExamples) ((map snd . transformToRules) t)
+    | otherwise = (Examples minss maxd . transformToExamples) ((map snd . transformToRules) t)
 
 transformToExamples :: [Rule] -> [Example]
-transformToExamples rs = 
-    concatMap (\r@(Rule c _) -> 
-        (concatMap (\x -> 
-            map (\m -> 
+transformToExamples rs =
+    concatMap (\r@(Rule c _) ->
+        (concatMap (\x ->
+            map (\m ->
                 Example (getMaxLengthOfRule x) (getMaxWidthOfRule x) (getMaxThicknessOfRule x) (toMaterial m) c) (getAllMaterialsOfRule x))
                  . (filter . canWrapAroundCuboid) r . delete r) rs) rs
 
@@ -213,7 +249,7 @@ compareConstraints _ _ = EQ
 _ ~+~ _ = error "only works for capacity constraint"
 
 (<#>) :: Input -> Input -> Input
-Examples f <#> Examples x = Examples (f ++ x)
+Examples y z f <#> Examples _ _ x = Examples y z (f ++ x)
 Rules f <#> Rules x = Rules (f ++ x)
 _ <#> _ = error "not possible"
 
@@ -241,6 +277,9 @@ eqWOMC (Example h0 w0 t0 _ _) (Example h1 w1 t1 _ _) = h0 == h1 && w0 == w1 && t
 eqM :: Example -> Example -> Bool
 eqM (Example _ _ _ m0 _) (Example _ _ _ m1 _) = m0 == m1
 
+eqC :: Example -> Example -> Bool
+eqC (Example _ _ _ _ c0) (Example _ _ _ _ c1) = c0 == c1
+
 getLength :: Example -> Int
 getLength (Example x _ _ _ _) = x
 
@@ -249,6 +288,21 @@ getWidth (Example _ x _ _ _) = x
 
 getThickness :: Example -> Int
 getThickness (Example _ _ x _ _) = x
+
+getMaterial :: Example -> Int
+getMaterial (Example _ _ _ x _) = toInt x
+
+setLengthDecision :: Int -> (Int -> Int -> Int -> Material -> Bool)
+setLengthDecision x y _ _ _ = y <= x
+
+setWidthDecision :: Int -> (Int -> Int -> Int -> Material -> Bool)
+setWidthDecision x _ y _ _ = y <= x
+
+setThicknessDecision :: Int -> (Int -> Int -> Int -> Material -> Bool)
+setThicknessDecision x _ _ y _ = y <= x
+
+setMaterialDecision :: Int -> (Int -> Int -> Int -> Material -> Bool)
+setMaterialDecision x _ _ _ y = toInt y <= x
 
 getMaxLengthOfRule :: Rule -> Int
 getMaxLengthOfRule = foldr (\(Example y _ _ _ _) z -> max y z) 0 . toRuleSet
