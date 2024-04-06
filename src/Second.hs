@@ -3,11 +3,12 @@ module Second where
 
 import Tree
 import Data.List
+import qualified Data.List.NonEmpty as N
 
 data Approach = RBDT | GiniManipulation Int Int
 data EvaluationMode = Greedy | NonGreedy
-data DecisionTreeB = LeafB [LeafContent] | NodeB (Int -> Int -> Int -> Material -> Bool) DecisionTreeB DecisionTreeB
-data DecisionTreeNB = LeafNB [LeafContent] | NodeNB [Int -> Int -> Int -> Material -> Bool] [DecisionTreeNB]
+data DecisionTreeB = LeafB   (N.NonEmpty LeafContent) | NodeB (Int -> Int -> Int -> Material -> Bool) DecisionTreeB DecisionTreeB
+data DecisionTreeNB = LeafNB (N.NonEmpty LeafContent) | NodeNB (N.NonEmpty (Int -> Int -> Int -> Material -> Bool)) (N.NonEmpty DecisionTreeNB)
 data Example = Example Int Int Int Material Class deriving Eq
 data Rule = Rule Class (Int -> Int -> Int -> Material -> Bool)
 
@@ -15,7 +16,7 @@ instance Eq Rule where
     (==) :: Rule -> Rule -> Bool
     r0@(Rule x _) == r1@(Rule y _) = x == y && sameRuleSet (==) r0 r1
 
-data Input = Examples Int Int [Example] | Rules [Rule]
+data Input = Examples Int Int (N.NonEmpty Example) | Rules (N.NonEmpty Rule)
 
 data Result = Result DecisionTreeB Class
 type Class = [String]
@@ -36,33 +37,53 @@ buildTree (Rules x) = (convertToBinaryTree . buildNBTree) x
 
 makePredictions :: EvaluationMode -> Example -> DecisionTreeB -> Class
 makePredictions e@NonGreedy x@(Example h w t m _) (NodeB f l r) = if f h w t m then makePredictions e x l else makePredictions e x r
-makePredictions e@NonGreedy x@(Example h w t m _) (LeafB ((LeafContent c cap ccap):_)) = if cap == ccap then error "no place for item" else c
---makePredictions e@Greedy x@(Example h w t m _) (NodeB f l r) = if f h w t m then makePredictions e x l else makePredictions e x r
---makePredictions e@Greedy x@(Example h w t m _) (LeafB c) = error "asdf"
+makePredictions NonGreedy _ (LeafB ((LeafContent c cap ccap) N.:| _)) = if cap == ccap then error "no place for item" else c
+makePredictions e@Greedy x@(Example h w t m _) d@(NodeB f l r) =
+    if materialDecisionsInTree d
+    then if f h w t m then makePredictions e x l else makePredictions e x r
+    else predictGreedily d
+makePredictions Greedy _ (LeafB ((LeafContent c cap ccap) N.:| _)) = if cap == ccap then error "no place for item" else c
+
+predictGreedily :: DecisionTreeB -> Class
+predictGreedily (NodeB f l r) = last . takeWhile (== []) $ do
+    sND <- [l, r]
+    [predictGreedily sND]
+predictGreedily (LeafB ((LeafContent c cap ccap) N.:| _)) = if cap == ccap then [] else c
+
+materialDecisionsInTree :: DecisionTreeB -> Bool
+materialDecisionsInTree (NodeB f l r) = or $ isMaterialDecision f : do
+    sND <- [l, r]
+    [materialDecisionsInTree sND]
+materialDecisionsInTree _ = False
+
+isMaterialDecision :: (Int -> Int -> Int -> Material -> Bool) -> Bool
+isMaterialDecision f = all (f 0 0 0) allMaterials
 
 addCapacity :: InventoryTree -> DecisionTreeB -> DecisionTreeB
 addCapacity it dt = putCapacity dt $ getCapacity it
 
-getCapacity :: InventoryTree -> [(Class, Constraint)]
+getCapacity :: InventoryTree -> N.NonEmpty (Class, Constraint)
 getCapacity (Node n _ c _ _ s) = do
     sND <- s
-    map (single (zip [[n]] ((filter isCapacity . mconcat . groupConstraints) c)) ~+~) (getCapacity sND)
-getCapacity (Leaf n _ c _ _ _) = zip [[n]] ((filter isCapacity . mconcat . groupConstraints) c)
+    N.map (tupleMap (<>) (head (zip [[n]] ((filter isCapacity . mconcat . groupConstraints) c)))) (getCapacity sND)
+    where
+        tupleMap :: (a -> a -> a) -> (b, a) -> (b, a) -> (b, a)
+        tupleMap op (x1, y1) (_, y2) = (x1, op y1 y2)
+getCapacity (Leaf n _ c _ _ _) =
+    case zip [[n]] ((filter isCapacity . mconcat . groupConstraints) c) of
+        [] -> ([n], NoConstraint) N.:| []
+        (x0:_) -> x0 N.:| []
 
 isCapacity :: Constraint -> Bool
 isCapacity (CapacityConstraint {}) = True
 isCapacity _ = False
 
-single :: [a] -> a
-single [x] = x
-single _ = error "not single"
-
-putCapacity :: DecisionTreeB -> [(Class, Constraint)] -> DecisionTreeB
+putCapacity :: DecisionTreeB -> N.NonEmpty (Class, Constraint) -> DecisionTreeB
 putCapacity (NodeB x l r) cc = NodeB x (putCapacity l cc) (putCapacity r cc)
 putCapacity (LeafB xs) cc =
-    LeafB $ map (\(LeafContent c y z) ->
-        case elemIndex c (map fst cc) of
-            Just i -> LeafContent c (getCurrentCapacity $ map snd cc !! i) (getCurrentCapacity $ map snd cc !! i)
+    LeafB $ N.map (\(LeafContent c y z) ->
+        case nElemIndex c (N.map fst cc) of
+            Just i -> LeafContent c (getCurrentCapacity $ N.map snd cc N.!! i) (getCurrentCapacity $ N.map snd cc N.!! i)
             Nothing -> LeafContent c y z) xs
     where
         getCurrentCapacity :: Constraint -> Int
@@ -70,31 +91,32 @@ putCapacity (LeafB xs) cc =
         getCapacity :: Constraint -> Int
         getCapacity (CapacityConstraint _ _ c _) = c
 
-buildBTree :: [Example] -> Int -> Int -> DecisionTreeB
+buildBTree :: N.NonEmpty Example -> Int -> Int -> DecisionTreeB
 buildBTree x minss maxd = let (l, r, _, f1, _, i) = getBestSplit x
                           in if length x >= minss && maxd /= 0 && i > 0
                              then NodeB f1 (buildBTree l minss maxd) (buildBTree r minss maxd)
-                             else (LeafB . nubBy (\(LeafContent y _ _) (LeafContent z _ _) -> y == z) . map (\(Example _ _ _ _ c) -> LeafContent c 0 0)) x
+                             else (LeafB . N.nubBy (\(LeafContent y _ _) (LeafContent z _ _) -> y == z) . N.map (\(Example _ _ _ _ c) -> LeafContent c 0 0)) x
 
-getBestSplit :: [Example] -> ([Example], [Example], Example -> Int, Int -> Int -> Int -> Material -> Bool, Int, Double)
+getBestSplit :: N.NonEmpty Example -> (N.NonEmpty Example, N.NonEmpty Example, Example -> Int, Int -> Int -> Int -> Material -> Bool, Int, Double)
 getBestSplit x =
     (foldr1 (\y@(_, _, _, _, _, yv) z@(_, _, _, _, _, zv) -> if yv >= zv then y else z) .
     concatMap (getSplits x)) [(getLength, setLengthDecision), (getWidth, setWidthDecision), (getThickness, setThicknessDecision), (getMaterial, setMaterialDecision)]
 
-getSplits :: [Example] -> (Example -> Int, Int -> (Int -> Int -> Int -> Material -> Bool)) ->
-    [([Example], [Example], Example -> Int, Int -> Int -> Int -> Material -> Bool, Int, Double)]
+getSplits :: N.NonEmpty Example -> (Example -> Int, Int -> (Int -> Int -> Int -> Material -> Bool)) ->
+    [(N.NonEmpty Example, N.NonEmpty Example, Example -> Int, Int -> Int -> Int -> Material -> Bool, Int, Double)]
 getSplits x (f0, f1) =
-    (filter (\(y0, y1, _, _, _, _) -> (not . null) y0 && (not . null) y1) .
-    map (\y -> (first y, second y, f0, f1 y, y, getInformationGain x (first y) (second y)))) ((nub . map f0) x)
+    foldr ((\(x0, x1, x2, x3, x4, x5) yt -> case (x0, x1) of
+        (y0:yn0, y1:yn1) -> (y0 N.:| yn0, y1 N.:| yn1, x2, x3, x4, x5):yt
+        _ -> yt) . (\y -> (first y, second y, f0, f1 y, y, getInformationGain x (first y) (second y)))) [] ((N.nub . N.map f0) x)
     where
         first  = fst . splitBy x f0
         second = snd . splitBy x f0
 
-splitBy :: [Example] -> (Example -> Int) -> Int -> ([Example], [Example])
-splitBy x f t = (filter (\y -> f y <= t) x, filter (\y -> f y > t) x)
+splitBy :: N.NonEmpty Example -> (Example -> Int) -> Int -> ([Example], [Example])
+splitBy x f t = (N.filter (\y -> f y <= t) x, N.filter (\y -> f y > t) x)
 
-getInformationGain :: [Example] -> [Example] -> [Example] -> Double
-getInformationGain a l r = giniIndex a - (wl * giniIndex l + wr * giniIndex r)
+getInformationGain :: N.NonEmpty Example -> [Example] -> [Example] -> Double
+getInformationGain a@(a0 N.:| an) l r = giniIndex (a0:an) - (wl * giniIndex l + wr * giniIndex r)
     where
         wl = (fromIntegral . length) l / (fromIntegral . length) a
         wr = (fromIntegral . length) r / (fromIntegral . length) a
@@ -108,47 +130,46 @@ giniIndex x = foldr (\y z -> cls y ** 2 + z) 0 (exampleClasses x)
 exampleClasses :: [Example] -> [Class]
 exampleClasses = map (\(Example _ _ _ _ c) -> c) . nubBy eqC
 
-buildNBTree :: [Rule] -> DecisionTreeNB
+buildNBTree :: N.NonEmpty Rule -> DecisionTreeNB
 buildNBTree r = buildNBTree' r [attributeLength, attributeWidth, attributeThickness, attributeMaterial]
 
-buildNBTree' :: [Rule] -> [[Rule] -> [Int]] -> DecisionTreeNB
-buildNBTree' r as@(_:_) = NodeNB (cutRules a as r) $ do
+buildNBTree' :: N.NonEmpty Rule -> [[Rule] -> [Int]] -> DecisionTreeNB
+buildNBTree' r@(r0 N.:| rs) as@(_:_) = NodeNB (cutRules a as r) $ do
     rND <- r
-    [buildNBTree' (deleteExclude rND r) (deleteFirst (\x -> a r == x r) as)]
-    where a = getFittest r as
+    return $ buildNBTree' ((mustBeNonEmpty . deleteExclude rND . toNonEmpty) r) (deleteFirst (\x -> (a . toNonEmpty) r == (x . toNonEmpty) r) as)
+    where a = getFittest (r0:rs) as
 buildNBTree' r [] =
-    (LeafNB . nubBy (\(LeafContent x _ _) (LeafContent y _ _) -> x == y) . map (\(Rule c _) -> LeafContent c 0 0)) r
+    (LeafNB . N.nubBy (\(LeafContent x _ _) (LeafContent y _ _) -> x == y) . N.map (\(Rule c _) -> LeafContent c 0 0)) r
 
 deleteExclude :: Rule -> [Rule] -> [Rule]
 deleteExclude = deleteBy (\x y -> toRuleSet y /= intersectBy eqWOC (toRuleSet x) (toRuleSet y))
 
-cutRules :: ([Rule] -> [Int]) -> [[Rule] -> [Int]] -> [Rule] -> [Int -> Int -> Int -> Material -> Bool]
-cutRules a as r = map (\x -> constructRuleOutOfSet [x] a) r
+cutRules :: ([Rule] -> [Int]) -> [[Rule] -> [Int]] -> N.NonEmpty Rule -> N.NonEmpty (Int -> Int -> Int -> Material -> Bool)
+cutRules a as r = N.map (\x -> constructRuleOutOfSet (x N.:| []) a) r
     where
-        constructRuleOutOfSet :: [Rule] -> ([Rule] -> [Int]) -> (Int -> Int -> Int -> Material -> Bool)
+        constructRuleOutOfSet :: N.NonEmpty Rule -> ([Rule] -> [Int]) -> (Int -> Int -> Int -> Material -> Bool)
         constructRuleOutOfSet r a
-            | (determine . findIndex (\x -> a r == x r)) as == 0 = \x _ _ _ -> x `elem` a r
-            | (determine . findIndex (\x -> a r == x r)) as == 1 = \_ x _ _ -> x `elem` a r
-            | (determine . findIndex (\x -> a r == x r)) as == 2 = \_ _ x _ -> x `elem` a r
-            | (determine . findIndex (\x -> a r == x r)) as == 3 = \_ _ _ x -> toInt x `elem` a r
+            | (determine . findIndex (\x -> (a . toNonEmpty) r == (x . toNonEmpty) r)) as == 0 = \x _ _ _ -> x `elem` (a . toNonEmpty) r
+            | (determine . findIndex (\x -> (a . toNonEmpty) r == (x . toNonEmpty) r)) as == 1 = \_ x _ _ -> x `elem` (a . toNonEmpty) r
+            | (determine . findIndex (\x -> (a . toNonEmpty) r == (x . toNonEmpty) r)) as == 2 = \_ _ x _ -> x `elem` (a . toNonEmpty) r
+            | (determine . findIndex (\x -> (a . toNonEmpty) r == (x . toNonEmpty) r)) as == 3 = \_ _ _ x -> toInt x `elem` (a . toNonEmpty) r
             | otherwise = error "no fifth attribute"
         determine :: Maybe a -> a
         determine (Just y) = y
         determine Nothing = error "cannot happen because four attributes present"
 
 convertToBinaryTree :: DecisionTreeNB -> DecisionTreeB
-convertToBinaryTree (NodeNB [x0,_] [y0,y1]) = NodeB x0 (convertToBinaryTree y0) (convertToBinaryTree y1)
-convertToBinaryTree (NodeNB (x:xs) (y:ys)) = NodeB x (convertToBinaryTree y) (convertToBinaryTree (NodeNB xs ys))
+convertToBinaryTree (NodeNB (x0 N.:| [_]) (y0 N.:| [y1])) = NodeB x0 (convertToBinaryTree y0) (convertToBinaryTree y1)
+convertToBinaryTree (NodeNB (x N.:| xs) (y N.:| ys)) = NodeB x (convertToBinaryTree y) (convertToBinaryTree (NodeNB (mustBeNonEmpty xs) (mustBeNonEmpty ys)))
 convertToBinaryTree (LeafNB x) = LeafB x
-convertToBinaryTree _ = error "not possible"
 
 transformToInput :: InventoryTree -> Approach -> Input
 transformToInput t RBDT
     | (not . all fst . transformToRules) t = error "ruleset is infinite"
-    | otherwise = (Rules . makeDisjoint) ((map snd . transformToRules) t)
+    | otherwise = (Rules . mustBeNonEmpty . makeDisjoint . toNonEmpty) ((N.map snd . transformToRules) t)
 transformToInput t (GiniManipulation minss maxd)
     | (not . all fst . transformToRules) t = error "ruleset is infinite"
-    | otherwise = (Examples minss maxd . transformToExamples) ((map snd . transformToRules) t)
+    | otherwise = (Examples minss maxd . mustBeNonEmpty . transformToExamples . toNonEmpty) ((N.map snd . transformToRules) t)
 
 transformToExamples :: [Rule] -> [Example]
 transformToExamples rs =
@@ -161,16 +182,14 @@ transformToExamples rs =
 canWrapAroundCuboid :: Rule -> Rule -> Bool
 canWrapAroundCuboid r0 r1 = toRuleSet r1 == intersectBy eqWOMC (toRuleSet r0) (toRuleSet r1)
 
-transformToRules :: InventoryTree -> [(FiniteDomainFlag, Rule)]
+transformToRules :: InventoryTree -> N.NonEmpty (FiniteDomainFlag, Rule)
 transformToRules (Node _ _ c _ _ s) = do
-    sND <- s
-    [foldr (-~&~-)
+    foldr (-~&~-)
      ((foldr (\cn fr -> ((-~&~-) fr .
-     constraintToRuleWithoutClass (fst fr)) cn) (constraintToRuleWithoutClass False NoConstraint) . mconcat . groupConstraints) c)
-      (transformToRules sND)]
+     constraintToRuleWithoutClass (fst fr)) cn) (constraintToRuleWithoutClass False NoConstraint) . mconcat . groupConstraints) c) . transformToRules <$> s
 transformToRules (Leaf b _ c _ _ _) =
-    [(foldr (\cn fr -> ((-~&~-) fr .
-     constraintToRule [b] (fst fr)) cn) (constraintToRule [b] False NoConstraint) . mconcat . groupConstraints) c]
+    return $ (foldr (\cn fr -> ((-~&~-) fr .
+     constraintToRule [b] (fst fr)) cn) (constraintToRule [b] False NoConstraint) . mconcat . groupConstraints) c
 
 constraintToRule :: Class -> FiniteDomainFlag -> Constraint -> (FiniteDomainFlag, Rule)
 constraintToRule c f cn =
@@ -184,7 +203,19 @@ constraintToRuleWithoutClass _ _ = error "not possible"
 
 makeDisjoint :: [Rule] -> [Rule]
 makeDisjoint =
-    concatMap makeSizeDisjoint . groupBy (sameRuleSet eqM) . splitMaterialRules . map (foldr (~&~) (Rule [] (\_ _ _ _ -> True))) . groupBy (sameRuleSet eqWOC)
+    concatMap (makeNonSubsetSizeRules . makeSizeDisjoint) . groupBy (sameRuleSet eqM) .
+    splitMaterialRules . map (foldr (~&~) (Rule [] (\_ _ _ _ -> True))) . groupBy (sameRuleSet eqWOC)
+
+makeNonSubsetSizeRules :: [Rule] -> [Rule]
+makeNonSubsetSizeRules x = concatMap (\y -> foldr (\a b -> if sameRuleSet (==) a y && (not . canWrapAroundCuboid a) y then b 
+    else Rule [] (extractMaterialsOutOfRule a) ~&~ makeNonSubsetSizeRule [(getMaxLengthOfRule, extractLengthOutOfRule),
+                                                                          (getMaxWidthOfRule, extractWidthOutOfRule),
+                                                                          (getMaxThicknessOfRule, extractThicknessOutOfRule)] a y:b) [] x) x
+
+makeNonSubsetSizeRule :: [(Rule -> Int, Rule -> (Int -> Int -> Int -> Material -> Bool))] -> Rule -> Rule -> Rule
+makeNonSubsetSizeRule ((f, r):s) x@(Rule cx _) y@(Rule cy _) =
+    Rule ((nub . (++) cx) cy) (if f x > f y then r y else r x) ~&~ makeNonSubsetSizeRule s x y
+makeNonSubsetSizeRule [] _ _ = Rule [] (\_ _ _ _ -> True)
 
 makeSizeDisjoint :: [Rule] -> [Rule]
 makeSizeDisjoint x = map (makeRuleSizeDisjoint x
@@ -244,13 +275,9 @@ compareConstraints (SizeConstraint {}) (MaterialConstraint {}) = LT
 compareConstraints (MaterialConstraint {}) (CapacityConstraint {}) = LT
 compareConstraints _ _ = EQ
 
-(~+~) :: (Class, Constraint) -> (Class, Constraint) -> (Class, Constraint)
-(cl0, CapacityConstraint a0 b0 x0 c0) ~+~ (_, CapacityConstraint _ b1 x1 c1) = (cl0, CapacityConstraint a0 (b0 + b1) (x0 + x1) (\z -> c0 z && c1 z))
-_ ~+~ _ = error "only works for capacity constraint"
-
 (<#>) :: Input -> Input -> Input
-Examples y z f <#> Examples _ _ x = Examples y z (f ++ x)
-Rules f <#> Rules x = Rules (f ++ x)
+Examples y z f <#> Examples _ _ x = Examples y z (f <> x)
+Rules f <#> Rules x = Rules (f <> x)
 _ <#> _ = error "not possible"
 
 (~&~) :: Rule -> Rule -> Rule
@@ -324,6 +351,18 @@ getAllThicknessOfRule = map (\(Example _ _ x _ _) -> x) . toRuleSet
 
 getAllMaterialsOfRule :: Rule -> [Int]
 getAllMaterialsOfRule = map (\(Example _ _ _ x _) -> toInt x) . toRuleSet
+
+extractLengthOutOfRule :: Rule -> (Int -> Int -> Int -> Material -> Bool)
+extractLengthOutOfRule r a _ _ _ = a `elem` getAllLengthsOfRule r
+
+extractWidthOutOfRule :: Rule -> (Int -> Int -> Int -> Material -> Bool)
+extractWidthOutOfRule r a _ _ _ = a `elem` getAllWidthsOfRule r
+
+extractThicknessOutOfRule :: Rule -> (Int -> Int -> Int -> Material -> Bool)
+extractThicknessOutOfRule r a _ _ _ = a `elem` getAllThicknessOfRule r
+
+extractMaterialsOutOfRule :: Rule -> (Int -> Int -> Int -> Material -> Bool)
+extractMaterialsOutOfRule r a _ _ _ = a `elem` getAllMaterialsOfRule r
 
 toInt :: Material -> Int
 toInt Wood = 0
@@ -455,3 +494,25 @@ deleteFirst :: (a -> Bool) -> [a] -> [a]
 deleteFirst f xs =
   foldr (\x r ~(_:tl) -> if f x then tl else x : r tl)
         (const []) xs xs
+
+nElemIndex :: Eq a => a -> N.NonEmpty a -> Maybe Int
+nElemIndex x (y N.:| ys) = elemIndex x (y:ys)
+
+nConcat :: N.NonEmpty [a] -> [a]
+nConcat = foldr1 (++)
+
+nConcatMap :: (a -> [b]) -> N.NonEmpty a -> [b]
+nConcatMap f (x N.:| xs) = foldr1 (++) (f x N.:| map f xs)
+
+nConcatMap1 :: (a -> N.NonEmpty b) -> N.NonEmpty a -> N.NonEmpty b
+nConcatMap1 f (x N.:| xs) = foldr1 (<>) (f x N.:| map f xs)
+
+nDelete :: Eq a => a -> N.NonEmpty a -> [a]
+nDelete x (y0 N.:| yn) = delete x (y0:yn)
+
+toNonEmpty :: N.NonEmpty a -> [a]
+toNonEmpty (x0 N.:| xn) = x0:xn
+
+mustBeNonEmpty :: [a] -> N.NonEmpty a
+mustBeNonEmpty (x0:xn) = x0 N.:| xn
+mustBeNonEmpty [] = error "is empty"

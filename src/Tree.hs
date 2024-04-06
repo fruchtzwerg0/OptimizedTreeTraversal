@@ -1,9 +1,13 @@
 module Tree where
 
 import Data.List
+import qualified Data.List.NonEmpty as N
 
 data Size = Size Int Int Int deriving Show
 data Material = Wood | Metal | Glass | NoMaterial deriving (Eq, Show)
+
+allMaterials :: [Material]
+allMaterials = [Wood, Metal, Glass]
 
 --data Constraint = SizeConstraint Int Int Int Int (Int -> Int -> Int -> Bool) | CapacityConstraint Int Int Int (Int -> Bool) | MaterialConstraint Int [Material] (Material -> Bool)
 
@@ -34,7 +38,7 @@ instance Semigroup Constraint where
     _ <> _ = error "Not possible"
 
 data Item = Item Material Size deriving Show
-data InventoryTree = Leaf String Order [Constraint] Int Int [Item] | Node String Order [Constraint] Int Int [InventoryTree] deriving Show
+data InventoryTree = Leaf String Order [Constraint] Int Int [Item] | Node String Order [Constraint] Int Int (N.NonEmpty InventoryTree) deriving Show
 type Order = Int
 
 testTree :: InventoryTree
@@ -42,9 +46,9 @@ testTree =
     Node "Root" 0 [SizeConstraint 0 6 7 8 (\x y z -> x <= 6 && y <= 7 && z <= 8),
           CapacityConstraint 0 4 6 (<= 6),
           MaterialConstraint 0 [Wood, Metal] (`elem` [Wood, Metal])] 1 1
-        [
-            Leaf "Leaf" 0 [CapacityConstraint 0 3 4 (<= 4)] 1 1 [Item Wood (Size 5 5 6)]
-        ]
+        (
+            Leaf "Leaf" 0 [CapacityConstraint 0 3 4 (<= 4)] 1 1 [Item Wood (Size 5 5 6)] N.:| []
+        )
 
 testTree2 :: InventoryTree
 testTree2 =
