@@ -207,10 +207,10 @@ makeDisjoint =
     splitMaterialRules . map (foldr (~&~) (Rule [] (\_ _ _ _ -> True))) . groupBy (sameRuleSet eqWOC)
 
 makeNonSubsetSizeRules :: [Rule] -> [Rule]
-makeNonSubsetSizeRules x = concatMap (\y -> foldr (\a b -> if sameRuleSet (==) a y && (not . canWrapAroundCuboid a) y then b 
+makeNonSubsetSizeRules x = (nubBy (sameRuleSet (==)) . concatMap (\y -> foldr (\a b -> if sameRuleSet (==) a y && (not . canWrapAroundCuboid a) y then b 
     else Rule [] (extractMaterialsOutOfRule a) ~&~ makeNonSubsetSizeRule [(getMaxLengthOfRule, extractLengthOutOfRule),
                                                                           (getMaxWidthOfRule, extractWidthOutOfRule),
-                                                                          (getMaxThicknessOfRule, extractThicknessOutOfRule)] a y:b) [] x) x
+                                                                          (getMaxThicknessOfRule, extractThicknessOutOfRule)] a y:b) [] x)) x
 
 makeNonSubsetSizeRule :: [(Rule -> Int, Rule -> (Int -> Int -> Int -> Material -> Bool))] -> Rule -> Rule -> Rule
 makeNonSubsetSizeRule ((f, r):s) x@(Rule cx _) y@(Rule cy _) =
