@@ -25,10 +25,17 @@ data LeafContent = LeafContent Class Int Int
 
 type FiniteDomainFlag = Bool
 
-solve :: InventoryTree -> EvaluationMode -> Example -> Approach -> Result
-solve i e x = predict i e x . transformToInput i
+transformInventoryTree :: InventoryTree -> InventoryTreeSecond
+transformInventoryTree (Node a b c d e (f:fs)) = NodeS a b c d e $ do
+    fND <- f N.:| fs
+    (return . transformInventoryTree) fND
+transformInventoryTree (Leaf a b c d e f) = LeafS a b c d e f
+transformInventoryTree (Node _ _ _ _ _ []) = error "Node has no items"
 
-predict :: InventoryTree -> EvaluationMode -> Example -> Input -> Result
+solve :: InventoryTree -> EvaluationMode -> Example -> Approach -> Result
+solve i e x = predict (transformInventoryTree i) e x . (transformToInput . transformInventoryTree) i
+
+predict :: InventoryTreeSecond -> EvaluationMode -> Example -> Input -> Result
 predict t e x i = (Result (buildTree i) . (makePredictions e x . addCapacity t . buildTree)) i
 
 buildTree :: Input -> DecisionTreeB
@@ -45,7 +52,7 @@ makePredictions e@Greedy x@(Example h w t m _) d@(NodeB f l r) =
 makePredictions Greedy _ (LeafB ((LeafContent c cap ccap) N.:| _)) = if cap == ccap then error "no place for item" else c
 
 predictGreedily :: DecisionTreeB -> Class
-predictGreedily (NodeB f l r) = last . takeWhile (== []) $ do
+predictGreedily (NodeB _ l r) = last . takeWhile (== []) $ do
     sND <- [l, r]
     [predictGreedily sND]
 predictGreedily (LeafB ((LeafContent c cap ccap) N.:| _)) = if cap == ccap then [] else c
@@ -59,17 +66,17 @@ materialDecisionsInTree _ = False
 isMaterialDecision :: (Int -> Int -> Int -> Material -> Bool) -> Bool
 isMaterialDecision f = all (f 0 0 0) allMaterials
 
-addCapacity :: InventoryTree -> DecisionTreeB -> DecisionTreeB
-addCapacity it dt = putCapacity dt $ getCapacity it
+addCapacity :: InventoryTreeSecond -> DecisionTreeB -> DecisionTreeB
+addCapacity it dt = (putCapacity dt . getCapacity) it
 
-getCapacity :: InventoryTree -> N.NonEmpty (Class, Constraint)
-getCapacity (Node n _ c _ _ s) = do
+getCapacity :: InventoryTreeSecond -> N.NonEmpty (Class, Constraint)
+getCapacity (NodeS n _ c _ _ s) = do
     sND <- s
     N.map (tupleMap (<>) (head (zip [[n]] ((filter isCapacity . mconcat . groupConstraints) c)))) (getCapacity sND)
     where
         tupleMap :: (a -> a -> a) -> (b, a) -> (b, a) -> (b, a)
         tupleMap op (x1, y1) (_, y2) = (x1, op y1 y2)
-getCapacity (Leaf n _ c _ _ _) =
+getCapacity (LeafS n _ c _ _ _) =
     case zip [[n]] ((filter isCapacity . mconcat . groupConstraints) c) of
         [] -> ([n], NoConstraint) N.:| []
         (x0:_) -> x0 N.:| []
@@ -163,7 +170,7 @@ convertToBinaryTree (NodeNB (x0 N.:| [_]) (y0 N.:| [y1])) = NodeB x0 (convertToB
 convertToBinaryTree (NodeNB (x N.:| xs) (y N.:| ys)) = NodeB x (convertToBinaryTree y) (convertToBinaryTree (NodeNB (mustBeNonEmpty xs) (mustBeNonEmpty ys)))
 convertToBinaryTree (LeafNB x) = LeafB x
 
-transformToInput :: InventoryTree -> Approach -> Input
+transformToInput :: InventoryTreeSecond -> Approach -> Input
 transformToInput t RBDT
     | (not . all fst . transformToRules) t = error "ruleset is infinite"
     | otherwise = (Rules . mustBeNonEmpty . makeDisjoint . toNonEmpty) ((N.map snd . transformToRules) t)
@@ -182,12 +189,12 @@ transformToExamples rs =
 canWrapAroundCuboid :: Rule -> Rule -> Bool
 canWrapAroundCuboid r0 r1 = toRuleSet r1 == intersectBy eqWOMC (toRuleSet r0) (toRuleSet r1)
 
-transformToRules :: InventoryTree -> N.NonEmpty (FiniteDomainFlag, Rule)
-transformToRules (Node _ _ c _ _ s) = do
+transformToRules :: InventoryTreeSecond -> N.NonEmpty (FiniteDomainFlag, Rule)
+transformToRules (NodeS _ _ c _ _ s) = do
     foldr (-~&~-)
      ((foldr (\cn fr -> ((-~&~-) fr .
      constraintToRuleWithoutClass (fst fr)) cn) (constraintToRuleWithoutClass False NoConstraint) . mconcat . groupConstraints) c) . transformToRules <$> s
-transformToRules (Leaf b _ c _ _ _) =
+transformToRules (LeafS b _ c _ _ _) =
     return $ (foldr (\cn fr -> ((-~&~-) fr .
      constraintToRule [b] (fst fr)) cn) (constraintToRule [b] False NoConstraint) . mconcat . groupConstraints) c
 
@@ -207,7 +214,7 @@ makeDisjoint =
     splitMaterialRules . map (foldr (~&~) (Rule [] (\_ _ _ _ -> True))) . groupBy (sameRuleSet eqWOC)
 
 makeNonSubsetSizeRules :: [Rule] -> [Rule]
-makeNonSubsetSizeRules x = (nubBy (sameRuleSet (==)) . concatMap (\y -> foldr (\a b -> if sameRuleSet (==) a y && (not . canWrapAroundCuboid a) y then b 
+makeNonSubsetSizeRules x = (nubBy (sameRuleSet (==)) . concatMap (\y -> foldr (\a b -> if sameRuleSet (==) a y && (not . canWrapAroundCuboid a) y then b
     else Rule [] (extractMaterialsOutOfRule a) ~&~ makeNonSubsetSizeRule [(getMaxLengthOfRule, extractLengthOutOfRule),
                                                                           (getMaxWidthOfRule, extractWidthOutOfRule),
                                                                           (getMaxThicknessOfRule, extractThicknessOutOfRule)] a y:b) [] x)) x
@@ -256,9 +263,9 @@ toRuleSet (Rule c x) = do
         determine (Just y) = y
         determine Nothing = error "cannot happen because ruleset not infinite"
 
-getConstraints :: InventoryTree -> [Constraint]
-getConstraints (Node _ _ c _ _ _) = c
-getConstraints (Leaf _ _ c _ _ _) = c
+getConstraints :: InventoryTreeSecond -> [Constraint]
+getConstraints (NodeS _ _ c _ _ _) = c
+getConstraints (LeafS _ _ c _ _ _) = c
 
 groupConstraints :: [Constraint] -> [[Constraint]]
 groupConstraints [] = []
