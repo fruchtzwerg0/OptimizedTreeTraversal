@@ -1,9 +1,12 @@
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE LambdaCase #-}
 module Second where
 
+import System.Random ( randomRIO )
 import Tree
 import Data.List
 import qualified Data.List.NonEmpty as N
+import Lib ( getRandomItem, FinalResult (FinalResult), evaluateConstraints, EvaluationResult (EvaluationResult), removeRandomItem, getItemCount )
 
 data Approach = RBDT | GiniManipulation Int Int
 data EvaluationMode = Greedy | NonGreedy
@@ -13,12 +16,12 @@ data Example = Example Int Int Int Material Class deriving Eq
 data Rule = Rule Class (Int -> Int -> Int -> Material -> Bool)
 
 instance Eq Rule where
-    (==) :: Rule -> Rule -> Bool
     r0@(Rule x _) == r1@(Rule y _) = x == y && sameRuleSet (==) r0 r1
 
 data Input = Examples Int Int (N.NonEmpty Example) | Rules (N.NonEmpty Rule)
 
-data Result = Result DecisionTreeB Class
+data Result = Result DecisionTreeB Class Int
+data FinalResult = FinalResult InventoryTree DecisionTreeB [Class] [Int]
 type Class = [String]
 
 data LeafContent = LeafContent Class Int Int
@@ -32,30 +35,103 @@ transformInventoryTree (Node a b c d e (f:fs)) = NodeS a b c d e $ do
 transformInventoryTree (Leaf a b c d e f) = LeafS a b c d e f
 transformInventoryTree (Node _ _ _ _ _ []) = error "Node has no items"
 
+run :: Int -> InventoryTree -> Approach -> EvaluationMode -> IO Second.FinalResult
+run 1 tree a e = do
+                    randomItem <- getRandomItem
+                    let Result dtree c o = solve tree e (toExample randomItem) a
+                    let tree' = inputToTree tree c randomItem
+                    case tree' of
+                        Just t  -> do
+                            treeRem <- Second.removeRandomItem t
+                            return $ Second.FinalResult treeRem dtree [c] [o]
+                        Nothing -> run 1 tree a e
+run n tree a e = do
+                    randomItem <- getRandomItem
+                    let Result dtree c o = solve tree e (toExample randomItem) a
+                    let tree' = inputToTree tree c randomItem
+                    case tree' of
+                        Just t  -> do
+                            treeRem' <- Second.removeRandomItem t
+                            Second.FinalResult tree'' _ c' o' <- run (pred n) treeRem' a e
+                            return $ Second.FinalResult tree'' dtree (c : c') (o : o')
+                        Nothing -> do
+                            Second.FinalResult tree'' _ c' o' <- run n tree a e
+                            return $ Second.FinalResult tree'' dtree c' o'
+
+removeRandomItem :: InventoryTree -> IO InventoryTree
+removeRandomItem t = removeRandomItem' (getItemCount t) t
+removeRandomItem' :: Int -> InventoryTree -> IO InventoryTree
+removeRandomItem' _ t@(Leaf _ _ _ _ _ []) = return t
+removeRandomItem' x (Leaf a b c d e (i:is)) = do
+            num <- randomRIO (0, x)
+            (Leaf a' b' c' d' e' is') <- removeRandomItem' x (Leaf a b c d e is)
+            return $ if num == 0 then Leaf a' b' c' d' e' is' else Leaf a' b' c' d' e' (i:is')
+removeRandomItem' x (Node name order constraints width height children) = do
+    updatedChildren <- mapM (removeRandomItem' x) children
+    return $ Node name order constraints width height updatedChildren
+
+inputToTree :: InventoryTree -> Class -> Item -> Maybe InventoryTree
+inputToTree t c i = if getItemCount t == (getItemCount . inputToTree' t c) i then Nothing else Just (inputToTree' t c i)
+inputToTree' :: InventoryTree -> Class -> Item -> InventoryTree
+inputToTree' t@(Node w x cs y z s) c i = Node w x cs y z $ case evaluateConstraints t i [] cs of
+    EvaluationResult True _ -> do
+        sND <- s
+        [inputToTree' sND c i]
+    _ -> s
+inputToTree' t@(Leaf b w x y z is) [c] i = if b == c then Leaf b w x y z (i:is) else t
+inputToTree' _ _ _ = error "class must be singleton"
+
+toExample :: Item -> Example
+toExample (Item m (Size x y z)) = Example x y z m []
+
 solve :: InventoryTree -> EvaluationMode -> Example -> Approach -> Result
 solve i e x = predict (transformInventoryTree i) e x . (transformToInput . transformInventoryTree) i
 
 predict :: InventoryTreeSecond -> EvaluationMode -> Example -> Input -> Result
-predict t e x i = (Result (buildTree i) . (makePredictions e x . addCapacity t . buildTree)) i
+predict t e x i = case (makePredictions False e x . addCapacity t . buildTree) i of
+    Just r -> r
+    Nothing -> error "Tree doesnt have place for item"
 
 buildTree :: Input -> DecisionTreeB
 buildTree (Examples minss maxd x) = buildBTree x minss maxd
 buildTree (Rules x) = (convertToBinaryTree . buildNBTree) x
 
-makePredictions :: EvaluationMode -> Example -> DecisionTreeB -> Class
-makePredictions e@NonGreedy x@(Example h w t m _) (NodeB f l r) = if f h w t m then makePredictions e x l else makePredictions e x r
-makePredictions NonGreedy _ (LeafB ((LeafContent c cap ccap) N.:| _)) = if cap == ccap then error "no place for item" else c
-makePredictions e@Greedy x@(Example h w t m _) d@(NodeB f l r) =
-    if materialDecisionsInTree d
-    then if f h w t m then makePredictions e x l else makePredictions e x r
-    else predictGreedily d
-makePredictions Greedy _ (LeafB ((LeafContent c cap ccap) N.:| _)) = if cap == ccap then error "no place for item" else c
+makePredictions :: Bool -> EvaluationMode -> Example -> DecisionTreeB -> Maybe Result
+makePredictions o e@NonGreedy x@(Example h w t m _) d@(NodeB f l r) = incrementResult d $ if f h w t m then makePredictions o e x l else makePredictions o e x r
+makePredictions o NonGreedy _ x@(LeafB ((LeafContent c cap ccap) N.:| _)) = if cap == ccap then Nothing else (Just . Result x c) (boolToInt o)
+makePredictions o e@Greedy x@(Example h w t m _) d@(NodeB f l r) = incrementResult d $
+    if f h w t m
+    then (if materialDecisionsInTree d || (isNothing . predictGreedily e x) r then makePredictions o e x l else predictGreedily e x r)
+    else makePredictions o e x r
+makePredictions o Greedy _ x@(LeafB ((LeafContent c cap ccap) N.:| _)) = if cap == ccap then Nothing else (Just . Result x c) (boolToInt o)
 
-predictGreedily :: DecisionTreeB -> Class
-predictGreedily (NodeB _ l r) = last . takeWhile (== []) $ do
-    sND <- [l, r]
-    [predictGreedily sND]
-predictGreedily (LeafB ((LeafContent c cap ccap) N.:| _)) = if cap == ccap then [] else c
+predictGreedily :: EvaluationMode -> Example -> DecisionTreeB -> Maybe Result
+predictGreedily e x d@(NodeB _ l r) = if isNothing (predictGreedily e x r) then (incrementResult d . makePredictions True e x) l else predictGreedily e x r
+predictGreedily _ _ d@(LeafB ((LeafContent c cap ccap) N.:| _)) = if cap == ccap then Nothing else (Just . Result d c) 1
+
+isNothing :: Maybe a -> Bool
+isNothing Nothing = True
+isNothing _ = False
+
+boolToInt :: Bool -> Int
+boolToInt False = 0
+boolToInt True  = 1
+{-
+predictGreedily :: DecisionTreeB -> Maybe Result
+predictGreedily t = (last . takeWhile (\case
+    Result _ [] _ -> True
+    _ -> False)) (predictGreedily' t)
+
+predictGreedily' :: DecisionTreeB -> [Result]
+predictGreedily' t@(NodeB _ l r) = do
+            sND <- [l, r]
+            (map (incrementResult t) . predictGreedily') sND
+predictGreedily' x@(LeafB ((LeafContent c cap ccap) N.:| _)) = if cap == ccap then [Result x [] 1] else [Result x c 1]
+-}
+
+incrementResult :: DecisionTreeB -> Maybe Result -> Maybe Result
+incrementResult t (Just (Result _ c o)) = (Just . Result t c . succ) o
+incrementResult _ Nothing = Nothing
 
 materialDecisionsInTree :: DecisionTreeB -> Bool
 materialDecisionsInTree (NodeB f l r) = or $ isMaterialDecision f : do

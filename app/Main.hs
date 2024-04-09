@@ -9,7 +9,7 @@ main :: IO ()
 main = do
     args <- getArgs
     case args of
-        [iterations, treeName, optimizations, propagationInterval] -> do
+        ["csp", iterations, treeName, optimizations, propagationInterval] -> do
             let iterationValue = read iterations :: Int
                 propagationIntervalValue = read propagationInterval :: Int
                 optimizationList = read optimizations :: [Optimization]
@@ -20,5 +20,6 @@ main = do
 
             (FinalResult ftree falloc performance) <- run iterationValue tree optimizationList propagationIntervalValue
             putStr ("Final tree: " ++ show ftree ++ "\n---\n" ++ "Allocations: " ++ show falloc ++ "\n---\n" ++ "Evaluations: " ++ show performance ++ "\n---\n" ++ "Average evaluations: " ++ show (fromIntegral (sum performance) / fromIntegral (length performance)))
-
+        ["rbdt", greedyMode] -> putStrLn "Usage: programName <iterations> <treeName> <optimizations> <propagationInterval>"
+        ["gini", greedyMode, minSamplesSplit, maxDepth] -> putStrLn "Usage: programName <iterations> <treeName> <optimizations> <propagationInterval>"
         _ -> putStrLn "Usage: programName <iterations> <treeName> <optimizations> <propagationInterval>"
