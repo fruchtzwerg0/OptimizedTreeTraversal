@@ -19,8 +19,8 @@ data Constraint = SizeConstraint Int Int Int Int (Int -> Int -> Int -> Bool) |
 instance Show Constraint where
   show (SizeConstraint c x y z _) =
     "SizeConstraint: " ++ show c ++ " " ++ show x ++ " " ++ show y ++ " " ++ show z
-  show (CapacityConstraint c _ x _) =
-    "CapacityConstraint: " ++ show c ++ " " ++ show x
+  show (CapacityConstraint c xc x _) =
+    "CapacityConstraint: " ++ show c ++ " " ++ show xc ++ " " ++ show x
   show (MaterialConstraint c x _) =
     "MaterialConstraint: " ++ show c ++ " " ++ show x
 

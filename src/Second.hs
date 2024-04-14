@@ -6,9 +6,8 @@ import System.Random ( randomRIO )
 import Tree
 import Data.List
 import qualified Data.List.NonEmpty as N
-import Lib ( getRandomItem, FinalResult (FinalResult), evaluateConstraints, EvaluationResult (EvaluationResult), removeRandomItem, getItemCount )
+import Lib ( getRandomItem, FinalResult (FinalResult), evaluateConstraints, EvaluationResult (EvaluationResult), removeRandomItem, getItemCount, reassemble )
 import Debug.Trace
-import Data.Foldable (Foldable(foldr'))
 
 data Approach = RBDT | GiniManipulation Int Int
 data EvaluationMode = Greedy | NonGreedy deriving Read
@@ -21,7 +20,7 @@ instance Show Rule where
     show r@(Rule c _) = "Rule " ++ show c ++ " ~{~" ++ (show . head . toRuleSet) r ++ "~}~ " ++ (show . last . toRuleSet) r
 
 instance Show DecisionTreeB where
-    show (NodeB f l r) = "NodeB (" ++ show l ++ " " ++ show r ++ ")"
+    show (NodeB f l r) = "NodeB (" ++ showDecision f ++ " " ++ show l ++ " " ++ show r ++ ")"
     show (LeafB c) = "LeafB (" ++ show c ++ ")"
 
 instance Show DecisionTreeNB where
@@ -33,13 +32,24 @@ instance Eq Rule where
 
 data Input = Examples Int Int (N.NonEmpty Example) | Rules (N.NonEmpty Rule) deriving Show
 
-data Result = Result DecisionTreeB Example Class Int
+data Result = Result DecisionTreeB Example Class Int deriving Show
 data FinalResult = FinalResult InventoryTree DecisionTreeB [Example] [Class] [Int]
 type Class = [String]
 
 data LeafContent = LeafContent Class Int Int deriving Show
 
 type FiniteDomainFlag = Bool
+
+showDecision :: (Int -> Int -> Int -> Material -> Bool) -> String
+showDecision f = case (find (\x -> not $ f x 0 0 (toMaterial 0)) [0..20]) of
+                    Just y -> show "Length <= " ++ show (pred y)
+                    Nothing -> case (find (\x -> not $ f 0 x 0 (toMaterial 0)) [0..20]) of
+                                    Just y -> show "Width <= " ++ show (pred y)
+                                    Nothing -> case (find (\x -> not $ f 0 0 x (toMaterial 0)) [0..20]) of
+                                                    Just y -> show "Thickness <= " ++ show (pred y)
+                                                    Nothing -> case (find (\x -> not $ f 0 0 0 (toMaterial x)) [0..3]) of
+                                                                    Just y -> show "Material <= " ++ show (toMaterial (pred y))
+                                                                    Nothing -> error "not possible"
 
 transformInventoryTree :: InventoryTree -> InventoryTreeSecond
 transformInventoryTree (Node a b c d e (f:fs)) = NodeS a b c d e $ do
@@ -48,28 +58,56 @@ transformInventoryTree (Node a b c d e (f:fs)) = NodeS a b c d e $ do
 transformInventoryTree (Leaf a b c d e f) = LeafS a b c d e f
 transformInventoryTree (Node _ _ _ _ _ []) = error "Node has no items"
 
+updateCapacities :: InventoryTree -> InventoryTree
+updateCapacities n@(Node a b c d e f)
+    | ((<) 0 . length) cc = Node a b ((flip (:) cnc . updateCapacity (head cc) . getItemCount) n) d e $ do
+        fND <- f
+        (return . updateCapacities) fND
+    | otherwise = Node a b c d e $ do
+        fND <- f
+        (return . updateCapacities) fND
+    where
+        cc = (filter isCapacity . mconcat . groupConstraints) c
+        cnc = (filter (not . isCapacity) . mconcat . groupConstraints) c
+        updateCapacity (CapacityConstraint a _ c d) x = CapacityConstraint a x c d
+updateCapacities n@(Leaf a b c d e f)
+    | ((<) 0 . length) cc = Leaf a b ((flip (:) cnc . updateCapacity (head cc) . getItemCount) n) d e f
+    | otherwise = n
+    where
+        cc = (filter isCapacity . mconcat . groupConstraints) c
+        cnc = (filter (not . isCapacity) . mconcat . groupConstraints) c
+        updateCapacity (CapacityConstraint a _ c d) x = CapacityConstraint a x c d
+
 run :: Int -> InventoryTree -> Approach -> EvaluationMode -> IO Second.FinalResult
 run 1 tree a e = do
                     randomItem <- getRandomItem
-                    let Result dtree x c o = solve tree e (toExample (trace (show randomItem) randomItem)) a
-                    let tree' = inputToTree tree c randomItem
-                    case tree' of
-                        Just t  -> do
-                            treeRem <- Second.removeRandomItem t
-                            return $ Second.FinalResult treeRem dtree [x] [c] [o]
+                    let res = solve tree e (toExample randomItem) a
+                    case res of
+                        Just (Result dtree x c o) -> do
+                            let tree' = inputToTree tree c randomItem
+                            case tree' of
+                                Just t -> do
+                                    treeRem <- Second.removeRandomItem t
+                                    return $ Second.FinalResult (updateCapacities treeRem) (addCapacity ((transformInventoryTree . updateCapacities) treeRem) dtree) [x] [c] [o]
+                                Nothing -> trace (show $ "Doesn't fit and unnoticed: " ++ show randomItem ++ show c) $ run 1 tree a e
                         Nothing -> run 1 tree a e
 run n tree a e = do
                     randomItem <- getRandomItem
-                    let Result dtree x c o = solve tree e (toExample randomItem) a
-                    let tree' = inputToTree tree c randomItem
-                    case tree' of
-                        Just t  -> do
-                            treeRem' <- Second.removeRandomItem t
-                            Second.FinalResult tree'' _ x' c' o' <- run (pred n) treeRem' a e
-                            return $ Second.FinalResult tree'' dtree (x : x') (c : c') (o : o')
+                    let res = solve tree e (toExample randomItem) a
+                    case res of
+                        Just (Result _ x c o)  -> do
+                            let tree' = inputToTree tree c randomItem
+                            case tree' of
+                                Just t -> do
+                                    treeRem' <- Second.removeRandomItem t
+                                    Second.FinalResult tree'' dtree'' x' c' o' <- run (pred n) (updateCapacities treeRem') a e
+                                    return $ Second.FinalResult tree'' dtree'' (x : x') (c : c') (o : o')
+                                Nothing -> trace (show $ "Doesn't fit but unnoticed: " ++ show randomItem ++ " " ++ show c) $ do
+                                    Second.FinalResult tree'' dtree'' x' c' o' <- run n tree a e
+                                    return $ Second.FinalResult (updateCapacities tree'') (addCapacity ((transformInventoryTree . updateCapacities) tree'') dtree'') x' c' o'
                         Nothing -> do
-                            Second.FinalResult tree'' _ x' c' o' <- run n tree a e
-                            return $ Second.FinalResult tree'' dtree x' c' o'
+                            Second.FinalResult tree'' dtree'' x' c' o' <- run n tree a e
+                            return $ Second.FinalResult (updateCapacities tree'') (addCapacity ((transformInventoryTree . updateCapacities) tree'') dtree'') x' c' o'
 
 removeRandomItem :: InventoryTree -> IO InventoryTree
 removeRandomItem t = removeRandomItem' (getItemCount t) t
@@ -97,13 +135,11 @@ inputToTree' _ _ _ = error "class must be singleton"
 toExample :: Item -> Example
 toExample (Item m (Size x y z)) = Example x y z m []
 
-solve :: InventoryTree -> EvaluationMode -> Example -> Approach -> Result
+solve :: InventoryTree -> EvaluationMode -> Example -> Approach -> Maybe Result
 solve i e x = predict (transformInventoryTree i) e x . (transformToInput . transformInventoryTree) i
 
-predict :: InventoryTreeSecond -> EvaluationMode -> Example -> Input -> Result
-predict t e x i = case (makePredictions False e x . addCapacity t . buildTree) i of
-    Just r -> r
-    Nothing -> error "Tree doesnt have place for item"
+predict :: InventoryTreeSecond -> EvaluationMode -> Example -> Input -> Maybe Result
+predict t e x = makePredictions False e x . addCapacity t . buildTree
 
 buildTree :: Input -> DecisionTreeB
 buildTree (Examples minss maxd x) = buildBTree x minss maxd
@@ -114,7 +150,9 @@ makePredictions o e@NonGreedy x@(Example h w t m _) d@(NodeB f l r) = incrementR
 makePredictions o NonGreedy ex x@(LeafB ((LeafContent c cap ccap) N.:| _)) = if cap == ccap then Nothing else (Just . Result x ex c) (boolToInt o)
 makePredictions o e@Greedy x@(Example h w t m _) d@(NodeB f l r) = incrementResult d $
     if f h w t m
-    then (if materialDecisionsInTree d || (isNothing . predictGreedily e x) r then makePredictions o e x l else predictGreedily e x r)
+    then if (not . isMaterialDecision) f || (not . materialDecisionsInTree) d || (isNothing . predictGreedily e x) r 
+         then makePredictions o e x l 
+         else predictGreedily e x r
     else makePredictions o e x r
 makePredictions o Greedy ex x@(LeafB ((LeafContent c cap ccap) N.:| _)) = if cap == ccap then Nothing else (Just . Result x ex c) (boolToInt o)
 
@@ -129,18 +167,6 @@ isNothing _ = False
 boolToInt :: Bool -> Int
 boolToInt False = 0
 boolToInt True  = 1
-{-
-predictGreedily :: DecisionTreeB -> Maybe Result
-predictGreedily t = (last . takeWhile (\case
-    Result _ [] _ -> True
-    _ -> False)) (predictGreedily' t)
-
-predictGreedily' :: DecisionTreeB -> [Result]
-predictGreedily' t@(NodeB _ l r) = do
-            sND <- [l, r]
-            (map (incrementResult t) . predictGreedily') sND
-predictGreedily' x@(LeafB ((LeafContent c cap ccap) N.:| _)) = if cap == ccap then [Result x [] 1] else [Result x c 1]
--}
 
 incrementResult :: DecisionTreeB -> Maybe Result -> Maybe Result
 incrementResult t (Just (Result _ x c o)) = (Just . Result t x c . succ) o
@@ -165,14 +191,14 @@ orderCapacity (LeafB xs) = LeafB (N.sortBy (\(LeafContent _ ccap0 cap0) (LeafCon
 getCapacity :: InventoryTreeSecond -> N.NonEmpty (Class, Constraint)
 getCapacity (NodeS n _ c _ _ s) = do
     sND <- s
-    case zip [[n]] ((filter isCapacity . (map . foldr (><)) mempty . groupConstraints) c) of
+    case zip [[n]] ((filter isCapacity . mconcat . groupConstraints) c) of
         [] -> getCapacity sND
         x  -> N.map (tupleMap (<>) (head x)) (getCapacity sND)
     where
         tupleMap :: (a -> a -> a) -> (b, a) -> (b, a) -> (b, a)
         tupleMap op (_, y1) (x2, y2) = (x2, op y1 y2)
 getCapacity (LeafS n _ c _ _ _) =
-    case zip [[n]] ((filter isCapacity . (map . foldr (><)) mempty . groupConstraints) c) of
+    case zip [[n]] ((filter isCapacity . mconcat . groupConstraints) c) of
         [] -> ([n], NoConstraint) N.:| []
         (x0:_) -> x0 N.:| []
 
@@ -278,12 +304,12 @@ transformToInput t (GiniManipulation minss maxd)
     | otherwise = (Examples minss maxd . mustBeNonEmpty . transformToExamples . toNonEmpty) ((N.map snd . transformToRules) t)
 
 transformToExamples :: [Rule] -> [Example]
-transformToExamples rs = (nub .
-    concatMap (\r@(Rule c _) ->
-        (concatMap (\x ->
-            map (\m ->
-                Example (getMaxLengthOfRule x) (getMaxWidthOfRule x) (getMaxThicknessOfRule x) (toMaterial m) c) (getAllMaterialsOfRule r))
-                 . (filter . canWrapAroundCuboid) r) rs)) rs
+transformToExamples rs = (nub . concatMap (\r@(Rule c _) -> do
+    l <- map getMaxLengthOfRule rs
+    w <- map getMaxWidthOfRule rs
+    t <- map getMaxThicknessOfRule rs
+    map (\m -> Example (min l (getMaxLengthOfRule r)) (min w (getMaxWidthOfRule r)) (min t (getMaxThicknessOfRule r)) (toMaterial m) c)
+     (getAllMaterialsOfRule r))) rs
 
 canWrapAroundCuboid :: Rule -> Rule -> Bool
 canWrapAroundCuboid r0 r1 = getMaxLengthOfRule r0    >= getMaxLengthOfRule r1 &&
@@ -295,14 +321,13 @@ transformToRules (NodeS _ _ c _ _ s) = do
     sND <- s
     frND <- transformToRules sND
     return $ (foldr
-      ((\ cn fr
+      (\ cn fr
           -> ((-~&~-) fr . constraintToRuleWithoutClass (fst fr)) cn)
-         . foldr (><) mempty)
       (constraintToRuleWithoutClass False mempty)
-      . groupConstraints) c -~&~- frND
+      . mconcat . groupConstraints) c -~&~- frND
 transformToRules (LeafS b _ c _ _ _) =
-    (return . foldr ((\cn fr -> ((-~&~-) fr .
-     constraintToRule [b] (fst fr)) cn) . foldr (><) mempty) (constraintToRule [b] False mempty) . groupConstraints) c
+    (return . foldr (\cn fr -> ((-~&~-) fr .
+     constraintToRule [b] (fst fr)) cn) (constraintToRule [b] False mempty) . mconcat . groupConstraints) c
 
 constraintToRule :: Class -> FiniteDomainFlag -> Constraint -> (FiniteDomainFlag, Rule)
 constraintToRule c f cn =
@@ -443,7 +468,7 @@ setThicknessDecision :: Int -> (Int -> Int -> Int -> Material -> Bool)
 setThicknessDecision x _ _ y _ = y <= x
 
 setMaterialDecision :: Int -> (Int -> Int -> Int -> Material -> Bool)
-setMaterialDecision x _ _ _ y = toInt y == x || y == NoMaterial
+setMaterialDecision x _ _ _ y = toInt y <= x
 
 getMaxLengthOfRule :: Rule -> Int
 getMaxLengthOfRule = foldr (\(Example y _ _ _ _) z -> max y z) 0 . toRuleSet

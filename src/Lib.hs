@@ -233,9 +233,9 @@ getRandomMaterial = do
 
 getRandomSize :: IO Size
 getRandomSize = do
-  x <- randomRIO (1, 10)
-  y <- randomRIO (1, 10)
-  z <- randomRIO (1, 2)
+  x <- randomRIO (4, 10)
+  y <- randomRIO (1, x)
+  z <- randomRIO (1, min y 2)
   return $ Size x y z
 
 getRandomItem :: IO Item

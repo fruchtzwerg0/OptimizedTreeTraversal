@@ -43,7 +43,7 @@ main = do
             (Second.FinalResult itree dtree example classes performance) <- Second.run iterationValue tree (GiniManipulation minSamplesSplitValue maxDepthValue) greedyModeValue
             putStr ("Final tree: " ++ show itree ++ "\n---\n" ++ "Decision tree: " ++ show dtree ++ "\n---\n" ++ "Allocations: " ++ show (zip3 example classes performance) ++ "\n---\n" ++ "Average evaluations: " ++ show (fromIntegral (sum performance) / fromIntegral (length performance)))
         ["debug"] -> do
-            putStr (show ((addCapacity (transformInventoryTree testTree3) . buildTree . flip transformToInput (GiniManipulation 3 10) . transformInventoryTree) testTree3))
+            --putStr (show ((addCapacity (transformInventoryTree testTree3) . buildTree . flip transformToInput (GiniManipulation 3 10) . transformInventoryTree) testTree3))
             --putStr $ show $ getCapacity (transformInventoryTree testTree3)
             --putStr $ show $ getInformationGain (mustBeNonEmpty [Example 0 0 0 NoMaterial ["A"]]) [Example 0 0 0 NoMaterial ["A"]] []
             --putStr $ show $ 0 < getInformationGain (mustBeNonEmpty
@@ -54,7 +54,7 @@ main = do
                  --(Example 0 0 0 NoMaterial ["D"]), (Example 0 0 0 NoMaterial ["E"]), (Example 0 0 0 NoMaterial ["F"])])
                 --([(Example 0 0 0 NoMaterial ["A"]), (Example 0 0 0 NoMaterial ["B"]), (Example 0 0 0 NoMaterial ["C"]),
                  --(Example 0 0 0 NoMaterial ["D"]), (Example 0 0 0 NoMaterial ["E"]), (Example 0 0 0 NoMaterial ["F"])])
-            --putStr $ show ((map snd . toNonEmpty . transformToRules . transformInventoryTree) testTree3)
+            putStr $ show $ transformToInput (transformInventoryTree testTree3) (GiniManipulation 3 10)
             --putStr $ show $ toRuleSet $ Rule ["RowA"] (\a b c d -> a < 5 && b < 6 && c < 7 && d `elem` [Wood, NoMaterial])
             --putStr $ show $ (\x -> (find (\h -> x h 0 0 NoMaterial)) [0..]) (\a b c d -> a < 5 && b < 6 && c < 7 && d `elem` [Wood, NoMaterial])
         _ -> putStrLn "Usage: programName <iterations> <treeName> <optimizations> <propagationInterval>"
