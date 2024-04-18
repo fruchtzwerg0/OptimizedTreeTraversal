@@ -1,5 +1,6 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE TupleSections #-}
 module Second where
 
 import System.Random ( randomRIO )
@@ -12,20 +13,46 @@ import Debug.Trace
 data Approach = RBDT | GiniManipulation Int Int
 data EvaluationMode = Greedy | NonGreedy deriving Read
 data DecisionTreeB = LeafB   (N.NonEmpty LeafContent) | NodeB (Int -> Int -> Int -> Material -> Bool) DecisionTreeB DecisionTreeB
-data DecisionTreeNB = LeafNB (N.NonEmpty LeafContent) | NodeNB (N.NonEmpty (Int -> Int -> Int -> Material -> Bool)) (N.NonEmpty DecisionTreeNB)
+data DecisionTreeNB = LeafNB (N.NonEmpty LeafContent) | NodeNB (N.NonEmpty ([Int], Int -> Int -> Int -> Material -> Bool)) (N.NonEmpty DecisionTreeNB)
 data Example = Example Int Int Int Material Class deriving (Eq, Show)
 data Rule = Rule Class (Int -> Int -> Int -> Material -> Bool)
 
 instance Show Rule where
-    show r@(Rule c _) = "Rule " ++ show c ++ " ~{~" ++ (show . head . toRuleSet) r ++ "~}~ " ++ (show . last . toRuleSet) r
+    show r@(Rule c _) = "Rule " ++ show c ++ " ~{~" ++ (show . head . toRuleSet) r ++ ", " ++ (show . last . toRuleSet) r ++ "~}~ "
 
 instance Show DecisionTreeB where
-    show (NodeB f l r) = "NodeB (" ++ showDecision f ++ " " ++ show l ++ " " ++ show r ++ ")"
-    show (LeafB c) = "LeafB (" ++ show c ++ ")"
+    show (NodeB f l r) = "NodeB (" ++ showDecision2 f ++ " " ++ show l ++ " " ++ show r ++ ")"
+    show (LeafB c) = "LeafB (" ++ (show . toNonEmpty) c ++ ")"
 
 instance Show DecisionTreeNB where
-    show (NodeNB f s) = "NodeNB (" ++ show s ++ ")"
-    show (LeafNB c) = "LeafNB (" ++ show c ++ ")"
+    show (NodeNB f s) = "NodeNB (" ++ show (toNonEmpty $ N.map (showDecision2 . snd) f) ++ " "  ++ (show . toNonEmpty) s ++ ")"
+    show (LeafNB c) = "LeafNB (" ++ (show . toNonEmpty) c ++ ")"
+
+instance Eq DecisionTreeNB where
+    (NodeNB f0 s0) == (NodeNB f1 s1) = N.map fst f0 == N.map fst f1 && s0 == s1
+    (LeafNB l0) == (LeafNB l1) = l0 == l1
+    _ == _ = False
+
+instance Ord DecisionTreeNB where
+    compare (NodeNB f0 s0) (NodeNB f1 s1) =
+        case compare (length f0) (length f1) of
+          EQ -> case compare (length s0) (length s1) of
+                  EQ -> case compareMap ((map fst . toNonEmpty) f0) ((map fst . toNonEmpty) f1) of
+                          EQ -> compareMap (toNonEmpty s0) (toNonEmpty s1)
+                          z  -> z
+                  z -> z
+          z -> z
+          where
+            compareMap :: Ord a => [a] -> [a] -> Ordering
+            compareMap x@(_:xs) y@(_:ys) =
+                case compare x y of
+                  EQ -> compareMap xs ys
+                  z  -> z
+            compareMap [] [] = EQ
+            compareMap _ _ = error "must be same length"
+    compare (LeafNB l0) (LeafNB l1) = compare l0 l1
+    compare (LeafNB _) (NodeNB _ _) = LT
+    compare (NodeNB _ _) (LeafNB _) = GT
 
 instance Eq Rule where
     r0@(Rule x _) == r1@(Rule y _) = x == y && sameRuleSet (==) r0 r1
@@ -36,20 +63,34 @@ data Result = Result DecisionTreeB Example Class Int deriving Show
 data FinalResult = FinalResult InventoryTree DecisionTreeB [Example] [Class] [Int]
 type Class = [String]
 
-data LeafContent = LeafContent Class Int Int deriving Show
+data LeafContent = LeafContent Class Int Int deriving (Show, Eq, Ord)
 
 type FiniteDomainFlag = Bool
 
+mapShowDecision :: [Int -> Int -> Int -> Material -> Bool] -> String
+mapShowDecision = foldl (\x y -> x ++ ", " ++ showDecision2 y) ""
+
 showDecision :: (Int -> Int -> Int -> Material -> Bool) -> String
 showDecision f = case (find (\x -> not $ f x 0 0 (toMaterial 0)) [0..20]) of
-                    Just y -> show "Length <= " ++ show (pred y)
+                    Just y -> "Length <= " ++ show (pred y)
                     Nothing -> case (find (\x -> not $ f 0 x 0 (toMaterial 0)) [0..20]) of
-                                    Just y -> show "Width <= " ++ show (pred y)
+                                    Just y -> "Width <= " ++ show (pred y)
                                     Nothing -> case (find (\x -> not $ f 0 0 x (toMaterial 0)) [0..20]) of
-                                                    Just y -> show "Thickness <= " ++ show (pred y)
+                                                    Just y -> "Thickness <= " ++ show (pred y)
                                                     Nothing -> case (find (\x -> not $ f 0 0 0 (toMaterial x)) [0..3]) of
-                                                                    Just y -> show "Material <= " ++ show (toMaterial (pred y))
+                                                                    Just y -> "Material <= " ++ show (toMaterial (pred y))
                                                                     Nothing -> error "not possible"
+
+showDecision2 :: (Int -> Int -> Int -> Material -> Bool) -> String
+showDecision2 f = case filter (\x -> f (-1) (-1) (-1) (toMaterial x)) [1..3] of
+                    [] -> case (filter (\x -> f (-1) x (-1) (toMaterial 0)) [1..20]) of
+                                    [] -> case (filter (\x -> f (-1) (-1) x (toMaterial 0)) [1..20]) of
+                                                    [] -> case (filter (\x -> f x (-1) (-1) (toMaterial 0)) [1..20]) of
+                                                                    [] -> error "not possible"
+                                                                    y -> "Length == " ++ show y
+                                                    y -> "Thickness == " ++ show y
+                                    y -> "Width == " ++ show y
+                    y -> "Material == " ++ show (map toMaterial y)
 
 transformInventoryTree :: InventoryTree -> InventoryTreeSecond
 transformInventoryTree (Node a b c d e (f:fs)) = NodeS a b c d e $ do
@@ -78,35 +119,38 @@ updateCapacities n@(Leaf a b c d e f)
         cnc = (filter (not . isCapacity) . mconcat . groupConstraints) c
         updateCapacity (CapacityConstraint a _ c d) x = CapacityConstraint a x c d
 
-run :: Int -> InventoryTree -> Approach -> EvaluationMode -> IO Second.FinalResult
-run 1 tree a e = do
+run :: InventoryTree -> Approach -> Int -> EvaluationMode -> IO Second.FinalResult
+run tree a = run' ((buildTree . flip transformToInput a . transformInventoryTree) tree) tree a
+
+run' :: DecisionTreeB -> InventoryTree -> Approach -> Int -> EvaluationMode -> IO Second.FinalResult
+run' dtree tree a 1 e = do
                     randomItem <- getRandomItem
-                    let res = solve tree e (toExample randomItem) a
+                    let res = predict (transformInventoryTree tree) dtree e (toExample randomItem)
                     case res of
-                        Just (Result dtree x c o) -> do
+                        Just (Result dtree' x c o) -> do
                             let tree' = inputToTree tree c randomItem
                             case tree' of
                                 Just t -> do
                                     treeRem <- Second.removeRandomItem t
-                                    return $ Second.FinalResult (updateCapacities treeRem) (addCapacity ((transformInventoryTree . updateCapacities) treeRem) dtree) [x] [c] [o]
-                                Nothing -> trace (show $ "Doesn't fit and unnoticed: " ++ show randomItem ++ show c) $ run 1 tree a e
-                        Nothing -> run 1 tree a e
-run n tree a e = do
+                                    return $ Second.FinalResult (updateCapacities treeRem) (addCapacity ((transformInventoryTree . updateCapacities) treeRem) dtree') [x] [c] [o]
+                                Nothing -> trace (show $ "Doesn't fit and unnoticed: " ++ show randomItem ++ show c) $ run' dtree tree a 1 e
+                        Nothing -> run' dtree tree a 1 e
+run' dtree tree a n e = do
                     randomItem <- getRandomItem
-                    let res = solve tree e (toExample randomItem) a
+                    let res = predict (transformInventoryTree tree) dtree e (toExample randomItem)
                     case res of
-                        Just (Result _ x c o)  -> do
+                        Just (Result dtree' x c o)  -> do
                             let tree' = inputToTree tree c randomItem
                             case tree' of
                                 Just t -> do
                                     treeRem' <- Second.removeRandomItem t
-                                    Second.FinalResult tree'' dtree'' x' c' o' <- run (pred n) (updateCapacities treeRem') a e
+                                    Second.FinalResult tree'' dtree'' x' c' o' <- run' dtree' (updateCapacities treeRem') a (pred n) e
                                     return $ Second.FinalResult tree'' dtree'' (x : x') (c : c') (o : o')
                                 Nothing -> trace (show $ "Doesn't fit but unnoticed: " ++ show randomItem ++ " " ++ show c) $ do
-                                    Second.FinalResult tree'' dtree'' x' c' o' <- run n tree a e
+                                    Second.FinalResult tree'' dtree'' x' c' o' <- run' dtree tree a n e
                                     return $ Second.FinalResult (updateCapacities tree'') (addCapacity ((transformInventoryTree . updateCapacities) tree'') dtree'') x' c' o'
                         Nothing -> do
-                            Second.FinalResult tree'' dtree'' x' c' o' <- run n tree a e
+                            Second.FinalResult tree'' dtree'' x' c' o' <- run' dtree tree a n e
                             return $ Second.FinalResult (updateCapacities tree'') (addCapacity ((transformInventoryTree . updateCapacities) tree'') dtree'') x' c' o'
 
 removeRandomItem :: InventoryTree -> IO InventoryTree
@@ -135,23 +179,26 @@ inputToTree' _ _ _ = error "class must be singleton"
 toExample :: Item -> Example
 toExample (Item m (Size x y z)) = Example x y z m []
 
-solve :: InventoryTree -> EvaluationMode -> Example -> Approach -> Maybe Result
-solve i e x = predict (transformInventoryTree i) e x . (transformToInput . transformInventoryTree) i
-
-predict :: InventoryTreeSecond -> EvaluationMode -> Example -> Input -> Maybe Result
-predict t e x = makePredictions False e x . addCapacity t . buildTree
+predict :: InventoryTreeSecond -> DecisionTreeB -> EvaluationMode -> Example -> Maybe Result
+predict t d e x = (makePredictions False e x . addCapacity t) d
 
 buildTree :: Input -> DecisionTreeB
 buildTree (Examples minss maxd x) = buildBTree x minss maxd
 buildTree (Rules x) = (convertToBinaryTree . buildNBTree) x
+
+convertToBinaryTree :: DecisionTreeNB -> DecisionTreeB
+convertToBinaryTree (NodeNB (_ N.:| []) (y0 N.:| [])) = convertToBinaryTree y0
+convertToBinaryTree (NodeNB (x0 N.:| [_]) (y0 N.:| [y1])) = NodeB (snd x0) (convertToBinaryTree y0) (convertToBinaryTree y1)
+convertToBinaryTree (NodeNB (x N.:| xs) (y N.:| ys)) = NodeB (snd x) (convertToBinaryTree y) (convertToBinaryTree (NodeNB (mustBeNonEmpty xs) (mustBeNonEmpty ys)))
+convertToBinaryTree (LeafNB x) = LeafB x
 
 makePredictions :: Bool -> EvaluationMode -> Example -> DecisionTreeB -> Maybe Result
 makePredictions o e@NonGreedy x@(Example h w t m _) d@(NodeB f l r) = incrementResult d $ if f h w t m then makePredictions o e x l else makePredictions o e x r
 makePredictions o NonGreedy ex x@(LeafB ((LeafContent c cap ccap) N.:| _)) = if cap == ccap then Nothing else (Just . Result x ex c) (boolToInt o)
 makePredictions o e@Greedy x@(Example h w t m _) d@(NodeB f l r) = incrementResult d $
     if f h w t m
-    then if (not . isMaterialDecision) f || (not . materialDecisionsInTree) d || (isNothing . predictGreedily e x) r 
-         then makePredictions o e x l 
+    then if (not . isMaterialDecision) f || (not . materialDecisionsInTree) d || (isNothing . predictGreedily e x) r
+         then makePredictions o e x l
          else predictGreedily e x r
     else makePredictions o e x r
 makePredictions o Greedy ex x@(LeafB ((LeafContent c cap ccap) N.:| _)) = if cap == ccap then Nothing else (Just . Result x ex c) (boolToInt o)
@@ -262,38 +309,32 @@ exampleClasses :: [Example] -> [Class]
 exampleClasses = map (\(Example _ _ _ _ c) -> c) . nubBy eqC
 
 buildNBTree :: N.NonEmpty Rule -> DecisionTreeNB
-buildNBTree r = buildNBTree' r [attributeLength, attributeWidth, attributeThickness, attributeMaterial]
+buildNBTree r = buildNBTree' r [(attributeLength, \v x _ _ _ -> x == v || x == 0, 0),
+                                (attributeWidth,  \v _ x _ _ -> x == v || x == 0, 1),
+                                (attributeThickness, \v _ _ x _ -> x == v || x == 0, 2),
+                                (attributeMaterial, \v _ _ _ x -> toInt x == v || x == NoMaterial, 3)]
 
-buildNBTree' :: N.NonEmpty Rule -> [[Rule] -> [Int]] -> DecisionTreeNB
-buildNBTree' r@(r0 N.:| rs) as@(_:_) = NodeNB (cutRules a as r) $ do
-    rND <- r
-    return $ buildNBTree' ((mustBeNonEmpty . deleteExclude rND . toNonEmpty) r) (deleteFirst (\x -> (a . toNonEmpty) r == (x . toNonEmpty) r) as)
+buildNBTree' :: N.NonEmpty Rule -> [([Rule] -> [Int], Int -> Int -> Int -> Int -> Material -> Bool, Int)] -> DecisionTreeNB
+buildNBTree' r@(r0 N.:| rs) as@(_:_) = mergeEqual $ NodeNB (N.map (\(x, y, _) -> ([x], y x)) currPred) $ do
+    (num, currPredND, ind) <- currPred
+    return $ buildNBTree' (mustBeNonEmpty (filter (any (\(Example l w d m _) -> currPredND num l w d m) . toRuleSet) (toNonEmpty r))) (deleteFirst (\(_, _, x) -> x == ind) as)
     where a = getFittest (r0:rs) as
+          currPred = (mustBeNonEmpty . sortBy (\x y -> compare (fst3 x) (fst3 y)) . map (, snd3 a, trd3 a)) ((nub . fst3 a . toNonEmpty) r)
+          mergeEqual :: DecisionTreeNB -> DecisionTreeNB
+          mergeEqual (NodeNB f0 s0) =
+            let res = (mustBeNonEmpty . map (\x -> ((N.head . N.map fst) x, foldr1 mergeNode (N.map snd x))) .
+                    N.groupBy (\(x, _) (y, _) -> x == y) . N.sortBy (\(x, _) (y, _) -> compare x y) . N.zip s0) f0 in
+            NodeNB (N.map snd res) (N.map fst res)
+          mergeNode :: ([Int], Int -> Int -> Int -> Material -> Bool) ->
+                       ([Int], Int -> Int -> Int -> Material -> Bool) ->
+                       ([Int], Int -> Int -> Int -> Material -> Bool)
+          mergeNode (num0, x) (num1, y) = (num0 ++ num1, \l w t m -> x l w t m || y l w t m)
 buildNBTree' r [] =
-    (LeafNB . N.nubBy (\(LeafContent x _ _) (LeafContent y _ _) -> x == y) . N.map (\(Rule c _) -> LeafContent c 0 0)) r
-
-deleteExclude :: Rule -> [Rule] -> [Rule]
-deleteExclude = deleteBy (\x y -> toRuleSet y /= intersectBy eqWOC (toRuleSet x) (toRuleSet y))
-
-cutRules :: ([Rule] -> [Int]) -> [[Rule] -> [Int]] -> N.NonEmpty Rule -> N.NonEmpty (Int -> Int -> Int -> Material -> Bool)
-cutRules a as r = N.map (\x -> constructRuleOutOfSet (x N.:| []) a) r
-    where
-        constructRuleOutOfSet :: N.NonEmpty Rule -> ([Rule] -> [Int]) -> (Int -> Int -> Int -> Material -> Bool)
-        constructRuleOutOfSet r a
-            | (determine . findIndex (\x -> (a . toNonEmpty) r == (x . toNonEmpty) r)) as == 0 = \x _ _ _ -> x `elem` (a . toNonEmpty) r
-            | (determine . findIndex (\x -> (a . toNonEmpty) r == (x . toNonEmpty) r)) as == 1 = \_ x _ _ -> x `elem` (a . toNonEmpty) r
-            | (determine . findIndex (\x -> (a . toNonEmpty) r == (x . toNonEmpty) r)) as == 2 = \_ _ x _ -> x `elem` (a . toNonEmpty) r
-            | (determine . findIndex (\x -> (a . toNonEmpty) r == (x . toNonEmpty) r)) as == 3 = \_ _ _ x -> toInt x `elem` (a . toNonEmpty) r
-            | otherwise = error "no fifth attribute"
+    (LeafNB . N.nubBy (\(LeafContent x _ _) (LeafContent y _ _) -> x == y) . nConcatMap1 (\(Rule c _) -> N.map (\ic -> LeafContent [ic] 0 0) (mustBeNonEmpty c))) r
 
 determine :: Maybe a -> a
 determine (Just y) = y
 determine Nothing = error "cannot happen because four attributes present"
-
-convertToBinaryTree :: DecisionTreeNB -> DecisionTreeB
-convertToBinaryTree (NodeNB (x0 N.:| [_]) (y0 N.:| [y1])) = NodeB x0 (convertToBinaryTree y0) (convertToBinaryTree y1)
-convertToBinaryTree (NodeNB (x N.:| xs) (y N.:| ys)) = NodeB x (convertToBinaryTree y) (convertToBinaryTree (NodeNB (mustBeNonEmpty xs) (mustBeNonEmpty ys)))
-convertToBinaryTree (LeafNB x) = LeafB x
 
 transformToInput :: InventoryTreeSecond -> Approach -> Input
 transformToInput t RBDT
@@ -340,8 +381,9 @@ constraintToRuleWithoutClass f _ = (f, Rule [] (\_ _ _ _ -> True))
 
 makeDisjoint :: [Rule] -> [Rule]
 makeDisjoint =
-    concatMap (makeNonSubsetSizeRules . makeSizeDisjoint) . groupBy (sameRuleSet eqM) .
-    splitMaterialRules . map (foldr (~&~) (Rule [] (\_ _ _ _ -> True))) . groupBy (sameRuleSet eqWOC)
+    concatMap (makeSizeDisjoint) . groupBy (\x y -> eqM ((head . toRuleSet) x) ((head . toRuleSet) y)) .
+    sortBy (\a b -> compare ((getMaterial . head . toRuleSet) a) ((getMaterial . head . toRuleSet) b)) .
+    splitMaterialRules . map (foldr (~&~) (Rule [] (\_ _ _ _ -> True))) . groupBy (sameRuleSet eqWOC) . sortBy orderRuleSet
 
 makeNonSubsetSizeRules :: [Rule] -> [Rule]
 makeNonSubsetSizeRules x = (nubBy (sameRuleSet (==)) . concatMap (\y -> foldr (\a b -> if sameRuleSet (==) a y && (not . canWrapAroundCuboid a) y then b
@@ -356,37 +398,62 @@ makeNonSubsetSizeRule [] _ _ = Rule [] (\_ _ _ _ -> True)
 
 makeSizeDisjoint :: [Rule] -> [Rule]
 makeSizeDisjoint x = map (makeRuleSizeDisjoint x
-    [(\(Example l _ _ _ _) -> Rule [] (\l0 _ _ _ -> l0 == l), \(Example l _ _ _ _) -> Rule [] (\l0 _ _ _ -> l0 > l), getLength, getMaxLength),
-     (\(Example _ w _ _ _) -> Rule [] (\_ w0 _ _ -> w0 == w), \(Example _ w _ _ _) -> Rule [] (\_ w0 _ _ -> w0 > w), getWidth, getMaxWidth),
-     (\(Example _ _ t _ _) -> Rule [] (\_ _ t0 _ -> t0 == t), \(Example _ _ t _ _) -> Rule [] (\_ _ t0 _ -> t0 > t), getThickness, getMaxThickness)]) x
+    [(\(Example l _ _ _ _) -> Rule [] (\l0 _ _ _ -> l0 == l || l0 == 0), \(Example l _ _ _ _) -> Rule [] (\l0 _ _ _ -> l0 > l || l0 == 0), getLength, getMaxLength),
+     (\(Example _ w _ _ _) -> Rule [] (\_ w0 _ _ -> w0 == w || w0 == 0), \(Example _ w _ _ _) -> Rule [] (\_ w0 _ _ -> w0 > w || w0 == 0), getWidth, getMaxWidth),
+     (\(Example _ _ t _ _) -> Rule [] (\_ _ t0 _ -> t0 == t || t0 == 0), \(Example _ _ t _ _) -> Rule [] (\_ _ t0 _ -> t0 > t || t0 == 0), getThickness, getMaxThickness)]) x
 
 makeRuleSizeDisjoint :: [Rule] -> [(Example -> Rule, Example -> Rule, Example -> Int, Example -> Example -> [Example])] -> Rule -> Rule
 makeRuleSizeDisjoint r ((r0,r1,r2,f):fs) x =
-    let xMaxAndBelow = ((findMax f . toRuleSet) x, (getBelow r2 ((findMax f . toRuleSet) x) . map (findMax f . toRuleSet) . delete x) r) in
-    if length (fst xMaxAndBelow) > 1
+    let xMaxAndBelow =
+         ((last . toRuleSet) x : filter (\ex -> ((==) 2 . length . f ex) ((last . toRuleSet) x))
+         (map (last . toRuleSet) (delete x r)),
+         find (\ex -> r2 ex < r2 ((last . toRuleSet) x)) $ sortBy (\a b -> r2 b `compare` r2 a) (map (last . toRuleSet) (delete x r))) in
+    if (length . fst) xMaxAndBelow > 1
     then (makeRuleSizeDisjoint r fs . (~&~) x . r0 . head . fst) xMaxAndBelow
-    else ((~&~) x . r1 . head . snd) xMaxAndBelow
-    where
-        getBelow :: (Example -> Int) -> [Example] -> [[Example]] -> [Example]
-        getBelow f0 x0 = foldr (\a b ->
-            if max ((f0 . head) a) ((f0 . head) b) > (f0 . head) x0
-            then if (f0 . head) a >  (f0 . head) b then a else b
-            else if (f0 . head) a <= (f0 . head) b then a else b
-            ) [Example 0 0 0 NoMaterial []]
+    else case snd xMaxAndBelow of
+        Just c -> ((~&~) (Rule ((nub . concatMap (\(Rule cl _) -> cl) . filter (`canWrapAroundCuboid` x)) r) (\_ _ _ _ -> True)) . (~&~) x . r1) c
+        Nothing -> x ~&~ Rule ((nub . concatMap (\(Rule cl _) -> cl) . filter (`canWrapAroundCuboid` x)) r) (\_ _ _ _ -> True)
 makeRuleSizeDisjoint _ [] _ = error "not possible"
 
 splitMaterialRules :: [Rule] -> [Rule]
-splitMaterialRules = concatMap (\x -> (map (\((Example _ _ _ m c):_) -> x ~&~ Rule c (\_ _ _ m0 -> m0 == m)) . groupBy eqM) (toRuleSet x))
+splitMaterialRules = nub . concatMap (\x -> (map (\((Example _ _ _ m c):_) -> x ~&~ Rule c (\_ _ _ m0 -> m0 == m || m0 == NoMaterial)) .
+                     groupBy eqM . sortBy (\y z -> compare (getMaterial y) (getMaterial z))) (toRuleSet x))
 
 sameRuleSet :: (Example -> Example -> Bool) -> Rule -> Rule -> Bool
-sameRuleSet eq x y = all (uncurry eq) (zip (toRuleSet x) (toRuleSet y))
+sameRuleSet eq x y
+    | (length . toRuleSet) x == (length . toRuleSet) y = all (uncurry eq) (zip (toRuleSet x) (toRuleSet y))
+    | otherwise = False
+
+orderRuleSet :: Rule -> Rule -> Ordering
+orderRuleSet x y
+    | (length . toRuleSet) x == (length . toRuleSet) y =
+        case compare (getMaxLengthOfRule x) (getMaxLengthOfRule y) of
+          EQ -> case compare (getMaxWidthOfRule x) (getMaxWidthOfRule y) of
+                  EQ -> case compare (getMaxThicknessOfRule x) (getMaxThicknessOfRule y) of
+                          EQ -> case compare ((length . getAllMaterialsOfRule) x) ((length . getAllMaterialsOfRule) y) of
+                                  EQ -> compareMaterials (getAllMaterialsOfRule x) (getAllMaterialsOfRule y)
+                                  z  -> z
+                          z  -> z
+                  z  -> z
+          z  -> z
+    | (length . toRuleSet) x < (length . toRuleSet) y = LT
+    | otherwise = GT
+          where
+            compareMaterials :: [Int] -> [Int] -> Ordering
+            compareMaterials x@(_:xs) y@(_:ys) =
+                case compare x y of
+                  EQ -> compareMaterials xs ys
+                  z  -> z
+            compareMaterials [] [] = EQ
+            compareMaterials _ _ = error "must be same length"
+
 
 toRuleSet :: Rule -> [Example]
 toRuleSet (Rule c x) = do
     he <- [((determine . find (\h -> x h 0 0 NoMaterial)) [1..])..pred ((determine . find (\h -> (not . x h 0 0) NoMaterial)) [((determine . find (\h -> x h 0 0 NoMaterial)) [1..])..])]
     wi <- [((determine . find (\w -> x 0 w 0 NoMaterial)) [1..])..pred ((determine . find (\w -> (not . x 0 w 0) NoMaterial)) [((determine . find (\w -> x 0 w 0 NoMaterial)) [1..])..])]
     th <- [((determine . find (\t -> x 0 0 t NoMaterial)) [1..])..pred ((determine . find (\t -> (not . x 0 0 t) NoMaterial)) [((determine . find (\t -> x 0 0 t NoMaterial)) [1..])..])]
-    ma <- (determine . Just . filter (x 0 0 0)) [Wood, Metal, Glass]
+    ma <- filter (x 0 0 0) [Wood, Metal, Glass]
     [Example he wi th ma c]
     where
         determine :: Maybe a -> a
@@ -535,10 +602,13 @@ getMaxThickness x@(Example _ _ x1 _ _) y@(Example _ _ y1 _ _)
     | x1 >  y1 = [x]
     | otherwise = [y]
 
-getMaxAttribute :: Ord a => (([Rule] -> [Int]) -> a) -> ([Rule] -> [Int]) -> [[Rule] -> [Int]] -> [[Rule] -> [Int]]
+getMaxAttribute :: Ord a => (([Rule] -> [Int]) -> a) ->
+    ([Rule] -> [Int], Int -> Int -> Int -> Int -> Material -> Bool, Int) ->
+    [([Rule] -> [Int], Int -> Int -> Int -> Int -> Material -> Bool, Int)] ->
+    [([Rule] -> [Int], Int -> Int -> Int -> Int -> Material -> Bool, Int)]
 getMaxAttribute f x y
-    | f x == f (head y) = x:y
-    | f x >  f (head y) = [x]
+    | (f . fst3) x == (f . fst3 . head) y = x:y
+    | (f . fst3) x >  (f . fst3 . head) y = [x]
     | otherwise = y
 
 findMax :: (Example -> Example -> [Example]) -> [Example] -> [Example]
@@ -553,16 +623,19 @@ attributeThickness = concatMap getAllThicknessOfRule
 attributeMaterial :: [Rule] -> [Int]
 attributeMaterial = concatMap getAllMaterialsOfRule
 
-getFittest :: [Rule] -> [[Rule] -> [Int]] -> ([Rule] -> [Int])
-getFittest r a = getFittest' r [attributeEffectiveness r numberOfClasses, attributeAutonomy r a, minimumValueDistribution r] a
+getFittest :: [Rule] -> [([Rule] -> [Int], Int -> Int -> Int -> Int -> Material -> Bool, Int)] ->
+    ([Rule] -> [Int], Int -> Int -> Int -> Int -> Material -> Bool, Int)
+getFittest r a = getFittest' r [attributeEffectiveness r numberOfClasses, attributeAutonomy r (map fst3 a), minimumValueDistribution r] a
 
-getFittest' :: Ord a => [Rule] -> [([Rule] -> [Int]) -> a] -> [[Rule] -> [Int]] -> ([Rule] -> [Int])
+getFittest' :: Ord a => [Rule] -> [([Rule] -> [Int]) -> a] ->
+    [([Rule] -> [Int], Int -> Int -> Int -> Int -> Material -> Bool, Int)] ->
+    ([Rule] -> [Int], Int -> Int -> Int -> Int -> Material -> Bool, Int)
 getFittest' r (f:fs) a =
     if 1 == length m
     then head m
     else getFittest' r fs m
     where
-        m = foldr (getMaxAttribute f) [] a
+        m = foldr (getMaxAttribute f) [head a] (tail a)
 getFittest' _ [] (a:_) = a
 getFittest' _ [] [] = error "not possible"
 
@@ -657,3 +730,12 @@ toNonEmpty (x0 N.:| xn) = x0:xn
 mustBeNonEmpty :: [a] -> N.NonEmpty a
 mustBeNonEmpty (x0:xn) = x0 N.:| xn
 mustBeNonEmpty [] = error "is empty"
+
+fst3 :: (a, b, c) -> a
+fst3 (x, _, _) = x
+
+snd3 :: (a, b, c) -> b
+snd3 (_, x, _) = x
+
+trd3 :: (a, b, c) -> c
+trd3 (_, _, x) = x
