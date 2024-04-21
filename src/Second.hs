@@ -95,11 +95,11 @@ mapShowDecision :: [Int -> Int -> Int -> Material -> Bool] -> String
 mapShowDecision = foldl (\x y -> x ++ ", " ++ showDecision2 y) ""
 
 showDecision :: (Int -> Int -> Int -> Material -> Bool) -> String
-showDecision f = case (find (\x -> not $ f x 0 0 (toMaterial 0)) [0..20]) of
+showDecision f = case (find (\x -> not $ f x 0 0 (toMaterial 0)) [0..10]) of
                     Just y -> "Length <= " ++ show (pred y)
-                    Nothing -> case (find (\x -> not $ f 0 x 0 (toMaterial 0)) [0..20]) of
+                    Nothing -> case (find (\x -> not $ f 0 x 0 (toMaterial 0)) [0..10]) of
                                     Just y -> "Width <= " ++ show (pred y)
-                                    Nothing -> case (find (\x -> not $ f 0 0 x (toMaterial 0)) [0..20]) of
+                                    Nothing -> case (find (\x -> not $ f 0 0 x (toMaterial 0)) [0..10]) of
                                                     Just y -> "Thickness <= " ++ show (pred y)
                                                     Nothing -> case (find (\x -> not $ f 0 0 0 (toMaterial x)) [0..3]) of
                                                                     Just y -> "Material <= " ++ show (toMaterial (pred y))
@@ -107,9 +107,9 @@ showDecision f = case (find (\x -> not $ f x 0 0 (toMaterial 0)) [0..20]) of
 
 showDecision2 :: (Int -> Int -> Int -> Material -> Bool) -> String
 showDecision2 f = case filter (\x -> f (-1) (-1) (-1) (toMaterial x)) [1..3] of
-                    [] -> case (filter (\x -> f (-1) x (-1) (toMaterial 0)) [1..20]) of
-                                    [] -> case (filter (\x -> f (-1) (-1) x (toMaterial 0)) [1..20]) of
-                                                    [] -> case (filter (\x -> f x (-1) (-1) (toMaterial 0)) [1..20]) of
+                    [] -> case (filter (\x -> f (-1) x (-1) (toMaterial 0)) [1..10]) of
+                                    [] -> case (filter (\x -> f (-1) (-1) x (toMaterial 0)) [1..10]) of
+                                                    [] -> case (filter (\x -> f x (-1) (-1) (toMaterial 0)) [1..10]) of
                                                                     [] -> error "not possible"
                                                                     y -> "Length == " ++ show y
                                                     y -> "Thickness == " ++ show y
@@ -274,8 +274,8 @@ getCapacity (NodeS n _ c _ _ s) = do
         (<%>) :: Constraint -> Constraint -> Constraint
         (CapacityConstraint _ s c _) <%> (CapacityConstraint _ s' c' _) =
             if c < c' 
-            then CapacityConstraint 0 (s - min (c - s) (c' - s')) c (<= c)
-            else CapacityConstraint 0 (s' - min (c - s) (c' - s')) c' (<= c')
+            then CapacityConstraint 0 (c - min (c - s) (c' - s')) c (<= c)
+            else CapacityConstraint 0 (c' - min (c - s) (c' - s')) c' (<= c')
         NoConstraint <%> x = x
         x <%> NoConstraint = x
         _ <%> _ = error "Not possible"
@@ -440,9 +440,9 @@ sameRuleSet eq x y
 
 toRuleSet :: Rule -> [Example]
 toRuleSet (Rule c x) = do
-    he <- filter (\l -> x l 0 0 NoMaterial) [1..20]
-    wi <- filter (\w -> x he w 0 NoMaterial) [1..20]
-    th <- filter (\t -> x he wi t NoMaterial) [1..20]
+    he <- filter (\l -> x l 0 0 NoMaterial) [1..10]
+    wi <- filter (\w -> x he w 0 NoMaterial) [1..10]
+    th <- filter (\t -> x he wi t NoMaterial) [1..10]
     ma <- filter (x he wi th) [Wood, Metal, Glass]
     [Example he wi th ma c]
 
@@ -652,7 +652,7 @@ values r a c = (a . rules c) r
 
 --DC
 dontCare :: [Rule] -> ([Rule] -> [Int]) -> Int
-dontCare r a = (maximum . a) r
+dontCare _ _ = -1
 
 --C
 hasDontCare :: [Int] -> Int -> Int
