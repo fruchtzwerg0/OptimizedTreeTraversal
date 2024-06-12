@@ -16,8 +16,7 @@ main = do
                 propagationIntervalValue = read propagationInterval :: Int
                 optimizationList = read optimizations :: [Optimization]
                 tree = case treeName of
-                    "testTree2" -> testTree2
-                    "testTree3" -> testTree3
+                    "testTree1" -> testTree1
                     _ -> error "Unknown tree name"
 
             (Lib.FinalResult ftree falloc performance) <- Lib.run iterationValue tree optimizationList propagationIntervalValue
@@ -26,23 +25,22 @@ main = do
             let iterationValue = read iterations :: Int
                 greedyModeValue = read greedyMode :: EvaluationMode
                 tree = case treeName of
-                    "testTree2" -> testTree2
-                    "testTree3" -> testTree3
+                    "testTree1" -> testTree1
                     _ -> error "Unknown tree name"
             (Second.FinalResult itree dtree example classes performance) <- Second.run tree RBDT iterationValue greedyModeValue
-            putStr ("Final tree: " ++ show itree ++ "\n---\n" ++ "Decision tree: " ++ show dtree ++ "\n---\n" ++ "Allocations: " ++ show (zip3 example classes performance) ++ "\n---\n" ++ "Average evaluations: " ++ show (fromIntegral (sum performance) / fromIntegral (length performance)))
-        ["gini", iterations, treeName, greedyMode, minSamplesSplit, maxDepth] -> do
+            putStr ("Final tree: " ++ show itree ++ "\n---\n" ++ "Decision tree: " ++ show dtree ++ "\n---\n" ++ "Allocations: " ++ show performance ++ "\n---\n" ++ "Average evaluations: " ++ show (fromIntegral (sum performance) / fromIntegral (length performance)))
+        ["gini", iterations, treeName, greedyMode] -> do
             let iterationValue = read iterations :: Int
                 greedyModeValue = read greedyMode :: EvaluationMode
                 tree = case treeName of
-                    "testTree2" -> testTree2
-                    "testTree3" -> testTree3
+                    "testTree1" -> testTree1
                     _ -> error "Unknown tree name"
-                minSamplesSplitValue = read minSamplesSplit :: Int
-                maxDepthValue = read maxDepth :: Int
+                minSamplesSplitValue = 3--read minSamplesSplit :: Int
+                maxDepthValue = 10--read maxDepth :: Int
             (Second.FinalResult itree dtree example classes performance) <- Second.run tree (GiniManipulation minSamplesSplitValue maxDepthValue) iterationValue greedyModeValue
-            putStr ("Final tree: " ++ show itree ++ "\n---\n" ++ "Decision tree: " ++ show dtree ++ "\n---\n" ++ "Allocations: " ++ show (zip3 example classes performance) ++ "\n---\n" ++ "Average evaluations: " ++ show (fromIntegral (sum performance) / fromIntegral (length performance)))
+            putStr ("Final tree: " ++ show itree ++ "\n---\n" ++ "Decision tree: " ++ show dtree ++ "\n---\n" ++ "Allocations: " ++ show performance ++ "\n---\n" ++ "Average evaluations: " ++ show (fromIntegral (sum performance) / fromIntegral (length performance)))
         ["debug"] -> do
+            --(zip3 example classes performance)
             --putStr (show ((addCapacity (transformInventoryTree testTree3) . buildTree . flip transformToInput (GiniManipulation 3 10) . transformInventoryTree) testTree3))
             --putStr $ show $ getCapacity (transformInventoryTree testTree3)
             --putStr $ show $ getInformationGain (mustBeNonEmpty [Example 0 0 0 NoMaterial ["A"]]) [Example 0 0 0 NoMaterial ["A"]] []
@@ -60,7 +58,7 @@ main = do
             --putStr $ show $ ((map snd $ toNonEmpty $ transformToRules $ transformInventoryTree testTree3) !! 1)
             --putStr $ show $ (head $ map snd $ toNonEmpty $ transformToRules $ transformInventoryTree testTree3)
             --putStr $ show $ ((~&~) ((~!~) $ (map snd $ toNonEmpty $ transformToRules $ transformInventoryTree testTree3) !! 1) (head $ map snd $ toNonEmpty $ transformToRules $ transformInventoryTree testTree3))
-            putStr $ show $ (makeDisjoint $ map snd $ toNonEmpty $ transformToRules $ transformInventoryTree testTree3)
+            putStr $ show $ (makeDisjoint $ map snd $ toNonEmpty $ transformToRules $ transformInventoryTree testTree1)
             --putStr $ show $ Rule ["RowA"] (\x _ _ _ -> x == 3 || x == 4 || x == 0)
             --putStr $ show $ (\x -> (find (\h -> x h 0 0 NoMaterial)) [0..]) (\a b c d -> a < 5 && b < 6 && c < 7 && d `elem` [Wood, NoMaterial])
-        _ -> putStrLn "Usage: programName <iterations> <treeName> <optimizations> <propagationInterval>"
+        _ -> putStrLn "Usage:\nprogramName csp  <iterations> <treeName (e.g. testTree1)> <optimizations (e.g. [ConstraintPropagation, ConstraintOrdering, ValueOrderingHeuristics])> <propagationInterval>\nprogramName rbdt <iterations> <treeName (e.g. testTree1)> Greedy|NonGreedy\nprogramName gini <iterations> <treeName (e.g. testTree1)> Greedy|NonGreedy"
